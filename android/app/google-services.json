@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "533606697818",
+    "project_id": "careelder-e475b",
+    "storage_bucket": "careelder-e475b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:533606697818:android:042b00f615cf1f83344163",
+        "android_client_info": {
+          "package_name": "com.example.finalapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "533606697818-91nu1ccn75p0j88ga2ogg8mf35udo8ne.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAr8WMq4UWn5fgYLjC_7XUxTMqsVYPY0ck"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "533606697818-91nu1ccn75p0j88ga2ogg8mf35udo8ne.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
