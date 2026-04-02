@@ -3,12 +3,16 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:geolocator/geolocator.dart';
+import '../services/location_service.dart';
 
 class CareElderScreen extends StatefulWidget {
   const CareElderScreen({super.key});
@@ -1227,6 +1231,11 @@ class _FamilyHomePage extends StatefulWidget {
 }
 
 class _FamilyHomePageState extends State<_FamilyHomePage> {
+    // Biến vị trí
+    Position? _currentPosition;
+    String? _currentAddress;
+    StreamSubscription<Position>? _positionStreamSub;
+    bool _updatingLocation = false;
   static const int _maxImageSizeBytes = 5 * 1024 * 1024;
   static const Set<String> _allowedExtensions = {
     'jpg',
@@ -1247,6 +1256,89 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   void initState() {
     super.initState();
     _loadFamilyScope();
+    if (!widget.isChildView) {
+      _startLocationTracking();
+    } else {
+      _listenParentLocation();
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionStreamSub?.cancel();
+    super.dispose();
+  }
+
+  // Cha/mẹ: Theo dõi vị trí và cập nhật Firestore
+  void _startLocationTracking() async {
+    _positionStreamSub?.cancel();
+    final locationStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
+    );
+    _positionStreamSub = locationStream.listen((pos) async {
+      if (pos == null) return;
+      setState(() => _currentPosition = pos);
+      final address = await LocationService.getAddressFromLatLng(pos.latitude, pos.longitude);
+      setState(() => _currentAddress = address);
+      await _updateLocationToFirestore(pos, address);
+    });
+    // Lấy vị trí lần đầu
+    final pos = await LocationService.getCurrentPosition();
+    if (pos != null) {
+      setState(() => _currentPosition = pos);
+      final address = await LocationService.getAddressFromLatLng(pos.latitude, pos.longitude);
+      setState(() => _currentAddress = address);
+      await _updateLocationToFirestore(pos, address);
+    }
+  }
+
+  Future<void> _updateLocationToFirestore(Position pos, String address) async {
+    if (_updatingLocation) return;
+    _updatingLocation = true;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'location': {
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'address': address,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }
+      }, SetOptions(merge: true));
+    } catch (_) {}
+    _updatingLocation = false;
+  }
+
+  // Người con: Lắng nghe vị trí cha/mẹ realtime
+  void _listenParentLocation() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    // Lấy uid cha/mẹ
+    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final parentUid = (doc.data()?['parentUid'] ?? '').toString();
+    if (parentUid.isEmpty) return;
+    FirebaseFirestore.instance.collection('users').doc(parentUid).snapshots().listen((snap) {
+      final data = snap.data();
+      if (data != null && data['location'] != null) {
+        final loc = data['location'];
+        setState(() {
+          _currentPosition = Position(
+            latitude: (loc['lat'] ?? 0).toDouble(),
+            longitude: (loc['lng'] ?? 0).toDouble(),
+            timestamp: DateTime.now(),
+            accuracy: 0,
+            altitude: 0,
+            heading: 0,
+            speed: 0,
+            speedAccuracy: 0,
+            altitudeAccuracy: 0,
+            headingAccuracy: 0,
+          );
+          _currentAddress = loc['address']?.toString();
+        });
+      }
+    });
   }
 
   Future<void> _loadFamilyScope() async {
@@ -1927,6 +2019,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Card vị trí mới cho cha/mẹ và con
+        if (!widget.isChildView) _buildLocationCardParent(),
         widget.isChildView
             ? _buildTopActionRow(scope)
             : _buildParentQuickActionRow(scope),
@@ -1935,6 +2029,126 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         const SizedBox(height: 12),
         _buildTaskManagerCard(scope),
       ],
+    );
+  }
+
+  // Card vị trí cho cha/mẹ
+  Widget _buildLocationCardParent() {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Vị trí hiện tại', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(height: 12),
+            if (_currentPosition != null)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Địa chỉ chi tiết
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Địa chỉ chi tiết:', style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        Text(
+                          _currentAddress ?? '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tọa độ: ${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: SizedBox(height: 40, width: 40, child: CircularProgressIndicator())),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Card vị trí cho người con
+  Widget _buildLocationCardChild() {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Vị trí cha/mẹ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(height: 12),
+            if (_currentPosition != null)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Địa chỉ chi tiết
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Địa chỉ cha/mẹ:', style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        Text(
+                          _currentAddress ?? '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tọa độ: ${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  // Nút Mở Google Maps
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final lat = _currentPosition!.latitude;
+                      final lng = _currentPosition!.longitude;
+                      final url = 'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
+                      if (await canLaunchUrl(Uri.parse(url))) {
+                        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                      }
+                    },
+                    icon: const Icon(Icons.location_on),
+                    label: const Text('Mở Google Maps'),
+                  ),
+                ],
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: SizedBox(height: 40, width: 40, child: CircularProgressIndicator())),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2043,39 +2257,36 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(10),
-        child: SizedBox(
-          height: actionButtonSize * 2 + actionGap,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _buildLocationCard(scope, embedded: true)),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: actionButtonSize,
-                child: Column(
-                  children: [
-                    _buildSideActionButton(
-                      icon: Icons.photo_library,
-                      tooltip: 'Mở ShareBox',
-                      onTap: () => _openShareBoxBottomSheet(scope),
-                      size: actionButtonSize,
-                    ),
-                    const SizedBox(height: actionGap),
-                    _buildSideActionButton(
-                      icon: Icons.add,
-                      tooltip: canAddTasks
-                          ? 'Thêm công việc'
-                          : 'Chỉ tài khoản Con được thêm công việc',
-                      onTap: canAddTasks
-                          ? () => _showTaskDialog(scope: scope)
-                          : null,
-                      size: actionButtonSize,
-                    ),
-                  ],
-                ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _buildLocationCard(scope, embedded: true)),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: actionButtonSize,
+              child: Column(
+                children: [
+                  _buildSideActionButton(
+                    icon: Icons.photo_library,
+                    tooltip: 'Mở ShareBox',
+                    onTap: () => _openShareBoxBottomSheet(scope),
+                    size: actionButtonSize,
+                  ),
+                  const SizedBox(height: actionGap),
+                  _buildSideActionButton(
+                    icon: Icons.add,
+                    tooltip: canAddTasks
+                        ? 'Thêm công việc'
+                        : 'Chỉ tài khoản Con được thêm công việc',
+                    onTap: canAddTasks
+                        ? () => _showTaskDialog(scope: scope)
+                        : null,
+                    size: actionButtonSize,
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2147,20 +2358,76 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         final location = data['location'];
         final lat = location is Map ? location['lat'] : null;
         final lng = location is Map ? location['lng'] : null;
+        final address = location is Map ? location['address'] : null;
         final updatedAt = location is Map ? location['updatedAt'] : null;
         final updatedLabel = updatedAt is Timestamp
             ? _formatDateTime(updatedAt.toDate())
             : 'Chưa cập nhật';
 
-        final tile = ListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-          leading: const Icon(Icons.place, color: Colors.redAccent),
-          title: Text(title),
-          subtitle: Text(
-            lat != null && lng != null
-                ? 'Lat: $lat | Lng: $lng\nCập nhật: $updatedLabel'
-                : 'Chưa có vị trí realtime',
+        final hasLocation = lat != null && lng != null;
+        final mapsUrl = hasLocation
+            ? 'https://www.google.com/maps/search/?api=1&query=$lat,$lng'
+            : '';
+
+        final tile = Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.place, color: Colors.redAccent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (hasLocation) ...[
+                Text(
+                  widget.isChildView ? 'Địa chỉ cha/mẹ:' : 'Địa chỉ chi tiết:',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  (address?.toString().trim().isNotEmpty ?? false)
+                      ? address.toString()
+                      : '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                  style: const TextStyle(fontSize: 13.5, height: 1.4),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Tọa độ: ${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Cập nhật: $updatedLabel',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    if (!await canLaunchUrl(Uri.parse(mapsUrl))) return;
+                    await launchUrl(
+                      Uri.parse(mapsUrl),
+                      mode: LaunchMode.externalApplication,
+                    );
+                  },
+                  icon: const Icon(Icons.location_on),
+                  label: const Text('Mở Google Maps'),
+                ),
+              ] else
+                const Text('Chưa có vị trí realtime'),
+            ],
           ),
         );
 

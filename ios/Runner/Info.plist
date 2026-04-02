@@ -47,3 +47,11 @@
 	<true/>
 </dict>
 </plist>
+
+<!-- Quyền truy cập vị trí cho iOS -->
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
+<key>NSLocationAlwaysUsageDescription</key>
+<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
