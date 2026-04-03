@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter Android (Cloudinary)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "BGW00176057",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=CLOUDINARY_CLOUD_NAME=dggbnsm78",
+        "--dart-define=CLOUDINARY_UPLOAD_PRESET=eldercare_unsigned"
+      ]
+    }
+  ]
+}
