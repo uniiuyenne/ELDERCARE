@@ -1251,6 +1251,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   bool _uploadingImage = false;
   String? _scopeError;
   _FamilyScope? _scope;
+  Set<String> _readNotificationIds = <String>{};
+  Set<String> _deletedNotificationIds = <String>{};
+  Set<String> _stickyUnreadNotificationIds = <String>{};
 
   @override
   void initState() {
@@ -1276,13 +1279,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
     );
     _positionStreamSub = locationStream.listen((pos) async {
-      if (pos == null) return;
       setState(() => _currentPosition = pos);
       final address = await LocationService.getAddressFromLatLng(pos.latitude, pos.longitude);
       setState(() => _currentAddress = address);
       await _updateLocationToFirestore(pos, address);
     });
-    // Lấy vị trí lần đầu
     final pos = await LocationService.getCurrentPosition();
     if (pos != null) {
       setState(() => _currentPosition = pos);
@@ -1292,74 +1293,18 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     }
   }
 
-  Future<void> _updateLocationToFirestore(Position pos, String address) async {
-    if (_updatingLocation) return;
-    _updatingLocation = true;
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'location': {
-          'lat': pos.latitude,
-          'lng': pos.longitude,
-          'address': address,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }
-      }, SetOptions(merge: true));
-    } catch (_) {}
-    _updatingLocation = false;
-  }
-
-  // Người con: Lắng nghe vị trí cha/mẹ realtime
-  void _listenParentLocation() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    // Lấy uid cha/mẹ
-    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-    final parentUid = (doc.data()?['parentUid'] ?? '').toString();
-    if (parentUid.isEmpty) return;
-    FirebaseFirestore.instance.collection('users').doc(parentUid).snapshots().listen((snap) {
-      final data = snap.data();
-      if (data != null && data['location'] != null) {
-        final loc = data['location'];
-        setState(() {
-          _currentPosition = Position(
-            latitude: (loc['lat'] ?? 0).toDouble(),
-            longitude: (loc['lng'] ?? 0).toDouble(),
-            timestamp: DateTime.now(),
-            accuracy: 0,
-            altitude: 0,
-            heading: 0,
-            speed: 0,
-            speedAccuracy: 0,
-            altitudeAccuracy: 0,
-            headingAccuracy: 0,
-          );
-          _currentAddress = loc['address']?.toString();
-        });
-      }
-    });
-  }
-
   Future<void> _loadFamilyScope() async {
-    setState(() {
-      _loadingScope = true;
-      _scopeError = null;
-    });
-
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
         setState(() {
-          _scopeError = 'Phiên đăng nhập đã hết hạn.';
+          _scopeError = 'Chưa đăng nhập.';
           _loadingScope = false;
         });
         return;
       }
 
-      final currentRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid);
+      final currentRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
       final currentDoc = await currentRef.get();
       final data = currentDoc.data() ?? {};
       final expectedRole = widget.isChildView ? 'child' : 'parent';
@@ -1412,22 +1357,48 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
       final ids = [user.uid, partnerUid]..sort();
       final channelId = '${ids.first}_${ids.last}';
+      final resolvedScope = _FamilyScope(
+        selfUid: user.uid,
+        partnerUid: partnerUid,
+        channelId: channelId,
+        selfRole: widget.isChildView ? 'child' : 'parent',
+        partnerRole: partnerRole,
+      );
 
       setState(() {
-        _scope = _FamilyScope(
-          selfUid: user.uid,
-          partnerUid: partnerUid,
-          channelId: channelId,
-          selfRole: widget.isChildView ? 'child' : 'parent',
-          partnerRole: partnerRole,
-        );
+        _scope = resolvedScope;
         _loadingScope = false;
       });
+      await _loadNotificationState(resolvedScope);
     } catch (e) {
       setState(() {
         _scopeError = 'Không thể tải dữ liệu liên kết: $e';
         _loadingScope = false;
       });
+    }
+  }
+
+  void _listenParentLocation() {}
+
+  Future<void> _updateLocationToFirestore(Position pos, String address) async {
+    if (_updatingLocation) return;
+    _updatingLocation = true;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'location': {
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'address': address,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Failed to update location: $e');
+    } finally {
+      _updatingLocation = false;
     }
   }
 
@@ -1806,125 +1777,356 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Future<void> _openNotificationsPanel() async {
     final scope = _scope;
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              height: MediaQuery.of(context).size.height * 0.62,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Thông báo',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: widget.isChildView && scope != null
-                        ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _taskCollection(scope).snapshots(),
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState ==
-                                  ConnectionState.waiting) {
-                                return const Center(
-                                  child: CircularProgressIndicator(),
-                                );
-                              }
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.62,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Thông báo',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: widget.isChildView && scope != null
+                            ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                                stream: _taskCollection(scope).snapshots(),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return const Center(
+                                      child: CircularProgressIndicator(),
+                                    );
+                                  }
 
-                              final docs = snapshot.data?.docs ?? const [];
-                              final activities = <Map<String, dynamic>>[];
-                              final now = DateTime.now();
-                              for (final doc in docs) {
-                                final data = doc.data();
-                                final checkedAt = data['checkedAt'];
-                                final checkedByRole = (data['checkedByRole'] ?? '')
-                                    .toString();
-                                final completed = data['completed'] == true;
-                                final title =
-                                    (data['title'] ?? 'Công việc').toString();
+                                  final docs = snapshot.data?.docs ?? const [];
+                                  final notifications =
+                                      _buildNotificationsFromTaskDocs(docs)
+                                          .where(
+                                            (item) =>
+                                                !_deletedNotificationIds.contains(item.id),
+                                          )
+                                          .toList();
 
-                                if (completed &&
-                                    checkedByRole == 'parent' &&
-                                    checkedAt is Timestamp) {
-                                  activities.add({
-                                    'type': 'completed',
-                                    'title': title,
-                                    'eventAt': checkedAt.toDate(),
-                                  });
-                                  continue;
-                                }
+                                  if (notifications.isEmpty) {
+                                    return const Center(
+                                      child: Text('Chưa có hoạt động mới từ Cha/Mẹ.'),
+                                    );
+                                  }
 
-                                final scheduledAt = data['scheduledAt'];
-                                if (!completed &&
-                                    scheduledAt is Timestamp &&
-                                    scheduledAt.toDate().isBefore(now)) {
-                                  activities.add({
-                                    'type': 'overdue',
-                                    'title': title,
-                                    'eventAt': scheduledAt.toDate(),
-                                  });
-                                }
-                              }
+                                  return ListView.separated(
+                                    itemCount: notifications.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: 8),
+                                    itemBuilder: (context, index) {
+                                      final item = notifications[index];
+                                      final relative = _formatRelativeTime(item.eventAt);
+                                      final exact = _formatExactDateTime(item.eventAt);
+                                      final isRead =
+                                          _readNotificationIds.contains(item.id);
 
-                              activities.sort(
-                                (a, b) => (b['eventAt'] as DateTime)
-                                .compareTo(a['eventAt'] as DateTime),
-                              );
-
-                              if (activities.isEmpty) {
-                                return const Center(
-                                  child: Text('Chưa có hoạt động mới từ Cha/Mẹ.'),
-                                );
-                              }
-
-                              return ListView.separated(
-                                itemCount: activities.length,
-                                separatorBuilder: (_, _) =>
-                                    const SizedBox(height: 8),
-                                itemBuilder: (context, index) {
-                                  final item = activities[index];
-                                  final type = item['type'] as String;
-                                  final at = item['eventAt'] as DateTime;
-                                  final title = item['title'] as String;
-                                  final relative = _formatRelativeTime(at);
-                                  final exact = _formatExactDateTime(at);
-                                  final isCompleted = type == 'completed';
-
-                                  final headline = isCompleted
-                                      ? 'Cha/Mẹ đã hoàn thành "$title"'
-                                      : 'Cha/Mẹ chưa hoàn thành "$title" (đã quá hạn)';
-
-                                  return ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                    ),
-                                    leading: Icon(
-                                      isCompleted
-                                          ? Icons.notifications_active
-                                          : Icons.warning_amber_rounded,
-                                      color: isCompleted
-                                          ? Colors.blueAccent
-                                          : Colors.orange,
-                                    ),
-                                    title: Text(headline),
-                                    subtitle: Text('$relative\n$exact'),
-                                    isThreeLine: true,
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          color: isRead
+                                              ? Colors.transparent
+                                              : Colors.yellow.shade100,
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: ListTile(
+                                          onTap: () async {
+                                            await _markNotificationRead(scope, item.id);
+                                            if (!mounted) return;
+                                            setModalState(() {});
+                                          },
+                                          contentPadding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                          ),
+                                          leading: Icon(
+                                            item.isCompleted
+                                                ? Icons.notifications_active
+                                                : Icons.warning_amber_rounded,
+                                            color: item.isCompleted
+                                                ? Colors.blueAccent
+                                                : Colors.orange,
+                                          ),
+                                          title: Text(
+                                            item.headline,
+                                            style: TextStyle(
+                                              fontWeight: isRead
+                                                  ? FontWeight.w400
+                                                  : FontWeight.w700,
+                                            ),
+                                          ),
+                                          subtitle: Text('$relative\n$exact'),
+                                          isThreeLine: true,
+                                          trailing: PopupMenuButton<String>(
+                                            onSelected: (value) async {
+                                              if (value == 'mark_unread') {
+                                                await _markNotificationUnread(
+                                                  scope,
+                                                  item.id,
+                                                );
+                                              } else if (value == 'delete') {
+                                                await _deleteNotification(
+                                                  scope,
+                                                  item.id,
+                                                );
+                                              }
+                                              if (!mounted) return;
+                                              setModalState(() {});
+                                            },
+                                            itemBuilder: (_) => const [
+                                              PopupMenuItem(
+                                                value: 'mark_unread',
+                                                child: Text('Đánh dấu chưa đọc'),
+                                              ),
+                                              PopupMenuItem(
+                                                value: 'delete',
+                                                child: Text('Xóa thông báo'),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
                                   );
                                 },
-                              );
-                            },
-                          )
-                        : const Center(
-                            child: Text('Chưa có thông báo mới.'),
-                          ),
+                              )
+                            : const Center(
+                                child: Text('Chưa có thông báo mới.'),
+                              ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+            );
+          },
+        );
+      },
+    );
+
+    if (widget.isChildView && scope != null) {
+      await _markAllNotificationsAsRead(scope);
+    }
+  }
+
+  String _notificationReadPrefsKey(_FamilyScope scope) {
+    final role = widget.isChildView ? 'child' : 'parent';
+    return 'notifications.read.${scope.channelId}.$role';
+  }
+
+  String _notificationDeletedPrefsKey(_FamilyScope scope) {
+    final role = widget.isChildView ? 'child' : 'parent';
+    return 'notifications.deleted.${scope.channelId}.$role';
+  }
+
+  String _notificationStickyUnreadPrefsKey(_FamilyScope scope) {
+    final role = widget.isChildView ? 'child' : 'parent';
+    return 'notifications.sticky_unread.${scope.channelId}.$role';
+  }
+
+  Future<void> _loadNotificationState(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    final read = prefs.getStringList(_notificationReadPrefsKey(scope)) ??
+        const <String>[];
+    final deleted = prefs.getStringList(_notificationDeletedPrefsKey(scope)) ??
+        const <String>[];
+    final stickyUnread =
+        prefs.getStringList(_notificationStickyUnreadPrefsKey(scope)) ??
+            const <String>[];
+    if (!mounted) return;
+    setState(() {
+      _readNotificationIds = read.toSet();
+      _deletedNotificationIds = deleted.toSet();
+      _stickyUnreadNotificationIds = stickyUnread.toSet();
+    });
+  }
+
+  Future<void> _persistNotificationState(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _notificationReadPrefsKey(scope),
+      _readNotificationIds.toList()..sort(),
+    );
+    await prefs.setStringList(
+      _notificationDeletedPrefsKey(scope),
+      _deletedNotificationIds.toList()..sort(),
+    );
+    await prefs.setStringList(
+      _notificationStickyUnreadPrefsKey(scope),
+      _stickyUnreadNotificationIds.toList()..sort(),
+    );
+  }
+
+  Future<void> _markNotificationRead(_FamilyScope scope, String id) async {
+    if (_readNotificationIds.contains(id)) return;
+    setState(() => _readNotificationIds = {..._readNotificationIds, id});
+    await _persistNotificationState(scope);
+  }
+
+  Future<void> _markNotificationUnread(_FamilyScope scope, String id) async {
+    if (!_readNotificationIds.contains(id)) return;
+    setState(() {
+      _readNotificationIds = {..._readNotificationIds}..remove(id);
+      _stickyUnreadNotificationIds = {..._stickyUnreadNotificationIds, id};
+    });
+    await _persistNotificationState(scope);
+  }
+
+  Future<void> _deleteNotification(_FamilyScope scope, String id) async {
+    setState(() {
+      _deletedNotificationIds = {..._deletedNotificationIds, id};
+      _readNotificationIds = {..._readNotificationIds}..remove(id);
+      _stickyUnreadNotificationIds = {..._stickyUnreadNotificationIds}
+        ..remove(id);
+    });
+    await _persistNotificationState(scope);
+  }
+
+  Future<void> _markAllNotificationsAsRead(_FamilyScope scope) async {
+    final snapshot = await _taskCollection(scope).get();
+    final incomingIds = _buildNotificationsFromTaskDocs(snapshot.docs)
+        .where((item) => !_deletedNotificationIds.contains(item.id))
+        .map((item) => item.id)
+        .toSet();
+    if (incomingIds.isEmpty) return;
+
+    final blockedIds = incomingIds.intersection(_stickyUnreadNotificationIds);
+    final mergedReadIds = {
+      ..._readNotificationIds,
+      ...incomingIds.difference(blockedIds),
+    };
+    final nextStickyUnreadIds = _stickyUnreadNotificationIds.difference(blockedIds);
+    if (setEquals(mergedReadIds, _readNotificationIds) &&
+        setEquals(nextStickyUnreadIds, _stickyUnreadNotificationIds)) {
+      return;
+    }
+
+    setState(() {
+      _readNotificationIds = mergedReadIds;
+      _stickyUnreadNotificationIds = nextStickyUnreadIds;
+    });
+    await _persistNotificationState(scope);
+  }
+
+  List<_NotificationItem> _buildNotificationsFromTaskDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final notifications = <_NotificationItem>[];
+    final now = DateTime.now();
+    for (final doc in docs) {
+      final data = doc.data();
+      final checkedAt = data['checkedAt'];
+      final checkedByRole = (data['checkedByRole'] ?? '').toString();
+      final completed = data['completed'] == true;
+      final title = (data['title'] ?? 'Công việc').toString();
+
+      if (completed && checkedByRole == 'parent' && checkedAt is Timestamp) {
+        final eventAt = checkedAt.toDate();
+        notifications.add(
+          _NotificationItem(
+            id: '${doc.id}|completed|${eventAt.millisecondsSinceEpoch}',
+            headline: 'Cha/Mẹ đã hoàn thành "$title"',
+            eventAt: eventAt,
+            isCompleted: true,
+          ),
+        );
+        continue;
+      }
+
+      final scheduledAt = data['scheduledAt'];
+      if (!completed &&
+          scheduledAt is Timestamp &&
+          scheduledAt.toDate().isBefore(now)) {
+        final eventAt = scheduledAt.toDate();
+        notifications.add(
+          _NotificationItem(
+            id: '${doc.id}|overdue|${eventAt.millisecondsSinceEpoch}',
+            headline: 'Cha/Mẹ chưa hoàn thành "$title" (đã quá hạn)',
+            eventAt: eventAt,
+            isCompleted: false,
+          ),
+        );
+      }
+    }
+
+    notifications.sort((a, b) => b.eventAt.compareTo(a.eventAt));
+    return notifications;
+  }
+
+  int _countUnreadNotifications(List<_NotificationItem> notifications) {
+    return notifications
+        .where(
+          (item) =>
+              !_deletedNotificationIds.contains(item.id) &&
+              !_readNotificationIds.contains(item.id),
+        )
+        .length;
+  }
+
+  Widget _buildNotificationAction() {
+    final scope = _scope;
+    if (!widget.isChildView || scope == null) {
+      return IconButton(
+        tooltip: 'Thông báo',
+        onPressed: _openNotificationsPanel,
+        icon: const Icon(Icons.notifications_none),
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _taskCollection(scope).snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        final notifications = _buildNotificationsFromTaskDocs(docs);
+        final unreadCount = _countUnreadNotifications(notifications);
+        return IconButton(
+          tooltip: 'Thông báo',
+          onPressed: _openNotificationsPanel,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.notifications_none),
+              if (unreadCount > 0)
+                Positioned(
+                  right: -6,
+                  top: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    child: Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       },
@@ -1980,11 +2182,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ),
         backgroundColor: Colors.blueAccent,
         actions: [
-          IconButton(
-            tooltip: 'Thông báo',
-            onPressed: _openNotificationsPanel,
-            icon: const Icon(Icons.notifications_none),
-          ),
+          _buildNotificationAction(),
           IconButton(
             tooltip: 'Đăng xuất',
             onPressed: () => _signOutAndBackToLogin(),
@@ -2071,73 +2269,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   Text(
                     'Tọa độ: ${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              )
-            else
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: SizedBox(height: 40, width: 40, child: CircularProgressIndicator())),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Card vị trí cho người con
-  Widget _buildLocationCardChild() {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Vị trí cha/mẹ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            const SizedBox(height: 12),
-            if (_currentPosition != null)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Địa chỉ chi tiết
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Địa chỉ cha/mẹ:', style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 6),
-                        Text(
-                          _currentAddress ?? '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.5),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Tọa độ: ${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 12),
-                  // Nút Mở Google Maps
-                  ElevatedButton.icon(
-                    onPressed: () async {
-                      final lat = _currentPosition!.latitude;
-                      final lng = _currentPosition!.longitude;
-                      final url = 'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
-                      if (await canLaunchUrl(Uri.parse(url))) {
-                        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                      }
-                    },
-                    icon: const Icon(Icons.location_on),
-                    label: const Text('Mở Google Maps'),
                   ),
                 ],
               )
@@ -2940,5 +3071,19 @@ class _ShareImage {
       createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
     );
   }
+}
+
+class _NotificationItem {
+  const _NotificationItem({
+    required this.id,
+    required this.headline,
+    required this.eventAt,
+    required this.isCompleted,
+  });
+
+  final String id;
+  final String headline;
+  final DateTime eventAt;
+  final bool isCompleted;
 }
 
