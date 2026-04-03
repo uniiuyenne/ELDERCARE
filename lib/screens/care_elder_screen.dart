@@ -17,6 +17,7 @@ import '../services/background_location_service.dart';
 import '../services/location_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/emergency_contact_service.dart';
+import '../services/notification_banner_service.dart';
 
 class CareElderScreen extends StatefulWidget {
   const CareElderScreen({super.key});
@@ -1337,7 +1338,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   StreamSubscription<Position>? _positionStreamSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   _parentLocationSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _taskChangeStreamSub;
   bool _updatingLocation = false;
+  Map<String, _TaskItem> _previousTasks = {};
   static const int _maxImageSizeBytes = 5 * 1024 * 1024;
   static const int _maxVideoSizeBytes = 40 * 1024 * 1024;
   static const String _alwaysPermissionPromptKeyPrefix =
@@ -1392,6 +1395,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _shareBoxUiVersion.dispose();
     _positionStreamSub?.cancel();
     _parentLocationSub?.cancel();
+    _taskChangeStreamSub?.cancel();
     super.dispose();
   }
 
@@ -1672,6 +1676,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         );
         _loadingScope = false;
       });
+
+      // Setup task change listener after scope is set
+      if (mounted) {
+        _setupTaskChangeListener(_scope!);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1688,6 +1697,52 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .collection('channels')
         .doc(scope.channelId)
         .collection('tasks');
+  }
+
+  void _setupTaskChangeListener(_FamilyScope scope) {
+    _taskChangeStreamSub?.cancel();
+    _taskChangeStreamSub = _taskCollection(scope)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) return;
+
+          final currentTasks = <String, _TaskItem>{};
+          for (final doc in snapshot.docs) {
+            final task = _TaskItem.fromDoc(doc);
+            currentTasks[task.id] = task;
+          }
+
+          // Check for new tasks or completed tasks from partner
+          for (final task in currentTasks.values) {
+            final previousTask = _previousTasks[task.id];
+
+            // New task created by partner
+            if (previousTask == null && task.createdByUid == scope.partnerUid) {
+              NotificationBannerService.showInfo(
+                context,
+                message: 'Việc cần làm mới: "${task.title}"',
+                displayDuration: const Duration(seconds: 2),
+              );
+            }
+
+            // Task completed by partner
+            if (previousTask != null &&
+                !previousTask.completed &&
+                task.completed &&
+                task.checkedByUid == scope.partnerUid) {
+              NotificationBannerService.showSuccess(
+                context,
+                message:
+                    '${scope.partnerRole == "child" ? "Con" : "Cha/Mẹ"} đã hoàn thành: "${task.title}"',
+                displayDuration: const Duration(seconds: 2),
+              );
+            }
+          }
+
+          // Update previous tasks
+          _previousTasks = currentTasks;
+        });
   }
 
   CollectionReference<Map<String, dynamic>> _shareCollection(
@@ -1858,6 +1913,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 'checkedAt': null,
                                 'checkedByUid': null,
                                 'checkedByRole': null,
+                                'createdByUid': scope.selfUid,
+                                'createdByRole': scope.selfRole,
                                 'createdAt': FieldValue.serverTimestamp(),
                               });
                             } else {
@@ -2959,7 +3016,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               Expanded(
                 child: SizedBox.expand(
                   child: FilledButton.icon(
-                    onPressed: () => _showEmergencyCallConfirm(scope),
+                    onPressed: () => _triggerEmergencySos(scope),
                     icon: const Icon(Icons.sos),
                     label: const Text(
                       'Cuộc gọi\nkhẩn cấp',
@@ -3051,7 +3108,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     }
   }
 
-  Future<void> _showEmergencyCallConfirm(_FamilyScope scope) async {
+  Future<void> _triggerEmergencySos(_FamilyScope scope) async {
     final childPhone = await _resolveLinkedChildPhone(scope);
     if (!mounted) return;
 
@@ -3062,51 +3119,28 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       return;
     }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Gọi khẩn cấp'),
-        content: Text(
-          'Bạn có muốn gọi SOS đến số của Con: $childPhone ?\nNếu cuộc gọi không mở được, ứng dụng sẽ chuyển sang SMS.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Gọi SOS'),
-          ),
-        ],
-      ),
+    final smsBody =
+        'SOS! Cha/Mẹ dang can lien lac khan cap. Vui long goi lai ngay.';
+    final action = await EmergencyContactService.startSosToChild(
+      phone: childPhone,
+      smsBody: smsBody,
     );
+    if (!mounted) return;
 
-    if (confirmed == true) {
-      final smsBody =
-          'SOS! Cha/Mẹ dang can lien lac khan cap. Vui long goi lai ngay.';
-      final action = await EmergencyContactService.startSosToChild(
-        phone: childPhone,
-        smsBody: smsBody,
-      );
-      if (!mounted) return;
-
-      switch (action) {
-        case EmergencyActionResult.callStarted:
-          _showMessage('Đã mở cuộc gọi SOS tới $childPhone.');
-          break;
-        case EmergencyActionResult.smsOpened:
-          _showMessage(
-            'Không mở được cuộc gọi, đã chuyển sang SMS tới $childPhone.',
-          );
-          break;
-        case EmergencyActionResult.failed:
-          _showMessage(
-            'Không thể mở cuộc gọi/SMS SOS. Vui lòng kiểm tra ứng dụng Điện thoại và Tin nhắn.',
-          );
-          break;
-      }
+    switch (action) {
+      case EmergencyActionResult.callStarted:
+        _showMessage('Đang gọi SOS trực tiếp tới $childPhone.');
+        break;
+      case EmergencyActionResult.smsOpened:
+        _showMessage(
+          'Không gọi trực tiếp được, đã chuyển sang SMS tới $childPhone.',
+        );
+        break;
+      case EmergencyActionResult.failed:
+        _showMessage(
+          'Không thể mở cuộc gọi/SMS SOS. Vui lòng kiểm tra quyền gọi điện.',
+        );
+        break;
     }
   }
 
@@ -4010,6 +4044,8 @@ class _TaskItem {
     required this.scheduledAt,
     required this.completed,
     this.checkedAt,
+    this.createdByUid,
+    this.checkedByUid,
   });
 
   final String id;
@@ -4019,6 +4055,8 @@ class _TaskItem {
   final DateTime scheduledAt;
   final bool completed;
   final DateTime? checkedAt;
+  final String? createdByUid;
+  final String? checkedByUid;
 
   factory _TaskItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -4035,6 +4073,12 @@ class _TaskItem {
           : DateTime.now(),
       completed: data['completed'] == true,
       checkedAt: checkedAt is Timestamp ? checkedAt.toDate() : null,
+      createdByUid: (data['createdByUid'] ?? '').toString().isEmpty
+          ? null
+          : (data['createdByUid'] ?? '').toString(),
+      checkedByUid: (data['checkedByUid'] ?? '').toString().isEmpty
+          ? null
+          : (data['checkedByUid'] ?? '').toString(),
     );
   }
 }
