@@ -1392,6 +1392,113 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   String? _scopeError;
   _FamilyScope? _scope;
 
+  bool _isDeletedForUser(
+    Map<String, dynamic> data,
+    String uid,
+  ) {
+    final deletedFor = data['deletedFor'];
+    if (deletedFor is! List) return false;
+    return deletedFor.any((e) => e?.toString() == uid);
+  }
+
+  Future<void> _deleteTimelineItemForMe(
+    _FamilyScope scope,
+    _ShareTimelineItem item,
+  ) async {
+    try {
+      if (item.isChat) {
+        await _chatCollection(scope).doc(item.chat!.id).set({
+          'deletedFor': FieldValue.arrayUnion([scope.selfUid]),
+        }, SetOptions(merge: true));
+      } else {
+        await _shareCollection(scope).doc(item.media!.id).set({
+          'deletedFor': FieldValue.arrayUnion([scope.selfUid]),
+        }, SetOptions(merge: true));
+      }
+    } on FirebaseException catch (e) {
+      _showMessage('Không thể xóa ở phía tôi: ${e.message ?? e.code}');
+    } catch (e) {
+      _showMessage('Không thể xóa ở phía tôi: $e');
+    }
+  }
+
+  Future<void> _revokeTimelineItem(
+    _FamilyScope scope,
+    _ShareTimelineItem item,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Thu hồi tin nhắn'),
+        content: const Text(
+          'Tin nhắn/media sẽ bị xóa ở cả bên gửi và bên nhận. Bạn có chắc chắn?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Thu hồi'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      if (item.isChat) {
+        await _chatCollection(scope).doc(item.chat!.id).delete();
+      } else {
+        await _shareCollection(scope).doc(item.media!.id).delete();
+      }
+    } on FirebaseException catch (e) {
+      _showMessage('Không thể thu hồi: ${e.message ?? e.code}');
+    } catch (e) {
+      _showMessage('Không thể thu hồi: $e');
+    }
+  }
+
+  Future<void> _showMyMessageActions(
+    _FamilyScope scope,
+    _ShareTimelineItem item,
+  ) async {
+    if (item.senderUid != scope.selfUid) return;
+
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.undo),
+                title: const Text('Thu hồi'),
+                subtitle: const Text('Xóa ở cả bên gửi và bên nhận'),
+                onTap: () => Navigator.of(sheetContext).pop('revoke'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Xóa ở phía tôi'),
+                subtitle: const Text('Chỉ xóa/ẩn ở bên bạn'),
+                onTap: () => Navigator.of(sheetContext).pop('delete_for_me'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (selected == 'revoke') {
+      await _revokeTimelineItem(scope, item);
+    } else if (selected == 'delete_for_me') {
+      await _deleteTimelineItemForMe(scope, item);
+    }
+  }
+
   void _notifyComposerUi() {
     if (!mounted) return;
     _composerUiVersion.value = _composerUiVersion.value + 1;
@@ -3175,6 +3282,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return result;
   }
 
+  // ignore: unused_element
   Future<void> _deleteSharedMedia(
     _FamilyScope scope,
     _ShareImage image,
@@ -3828,10 +3936,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   return const Center(child: Text('Không thể tải media.'));
                 }
 
-                final mediaEntries = shareSnapshot.data?.docs
-                        .map((d) => _ShareImage.fromDoc(d))
-                        .toList() ??
-                    [];
+                final shareDocs = shareSnapshot.data?.docs ?? const [];
+                final mediaEntries = shareDocs
+                    .where(
+                      (doc) => !_isDeletedForUser(doc.data(), scope.selfUid),
+                    )
+                    .map((d) => _ShareImage.fromDoc(d))
+                    .toList();
 
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: _chatStream(scope, limit: _chatLoadLimit),
@@ -3860,6 +3971,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     }
 
                     final chatEntries = chatSnapshot.data?.docs
+                            .where(
+                              (doc) =>
+                                  !_isDeletedForUser(doc.data(), scope.selfUid),
+                            )
                             .map((d) => _ChatMessage.fromDoc(d))
                             .toList() ??
                         [];
@@ -3928,82 +4043,102 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             final borderColor = isMine
                               ? Colors.blue.shade200
                               : Colors.blueGrey.shade200;
-
-                          return Align(
-                            alignment: alignment,
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 250),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: bubbleColor,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: borderColor),
-                                ),
-                                child: item.isChat
-                                    ? Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            item.chat!.text,
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.black87,
-                                            ),
+                          final bubble = ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 250),
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: bubbleColor,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: borderColor),
+                              ),
+                              child: item.isChat
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.chat!.text,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
                                           ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '$sideLabel • ${_formatDateTime(item.createdAt)}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              color: Colors.black54,
-                                            ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.black54,
                                           ),
-                                        ],
-                                      )
-                                    : GestureDetector(
-                                        onTap: () =>
-                                            _openImagePreview(item.media!),
-                                        child: item.media!.isVideo
-                                            ? Container(
-                                                height: 120,
-                                                width: 170,
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black12,
-                                                  borderRadius:
-                                                      BorderRadius.circular(8),
-                                                ),
-                                                child: const Center(
-                                                  child: Icon(
-                                                    Icons.videocam,
-                                                    size: 32,
-                                                  ),
-                                                ),
-                                              )
-                                            : ClipRRect(
+                                        ),
+                                      ],
+                                    )
+                                  : GestureDetector(
+                                      onTap: () =>
+                                          _openImagePreview(item.media!),
+                                      child: item.media!.isVideo
+                                          ? Container(
+                                              height: 120,
+                                              width: 170,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black12,
                                                 borderRadius:
                                                     BorderRadius.circular(8),
-                                                child: Image.network(
-                                                  item.media!.imageUrl,
-                                                  height: 130,
+                                              ),
+                                              child: const Center(
+                                                child: Icon(
+                                                  Icons.videocam,
+                                                  size: 32,
+                                                ),
+                                              ),
+                                            )
+                                          : ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: Image.network(
+                                                item.media!.imageUrl,
+                                                height: 130,
+                                                width: 170,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, _, _) =>
+                                                    const SizedBox(
+                                                  height: 120,
                                                   width: 170,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (_, _, _) =>
-                                                      const SizedBox(
-                                                    height: 120,
-                                                    width: 170,
-                                                    child: Center(
-                                                      child: Icon(
-                                                        Icons.broken_image,
-                                                      ),
+                                                  child: Center(
+                                                    child: Icon(
+                                                      Icons.broken_image,
                                                     ),
                                                   ),
                                                 ),
                                               ),
-                                      ),
-                              ),
+                                            ),
+                                    ),
                             ),
+                          );
+
+                          return Align(
+                            alignment: alignment,
+                            child: isMine
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Tùy chọn',
+                                        icon: const Icon(
+                                          Icons.more_horiz,
+                                          size: 20,
+                                        ),
+                                        onPressed: () =>
+                                            _showMyMessageActions(scope, item),
+                                      ),
+                                      bubble,
+                                    ],
+                                  )
+                                : bubble,
                           );
                         },
                       ),
@@ -4536,9 +4671,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 }
 
                 final mediaEntries =
-                    snapshot.data?.docs
-                        .map((d) => _ShareImage.fromDoc(d))
-                        .toList() ??
+                  snapshot.data?.docs
+                    .where(
+                      (doc) =>
+                        !_isDeletedForUser(doc.data(), scope.selfUid),
+                    )
+                    .map((d) => _ShareImage.fromDoc(d))
+                    .toList() ??
                     [];
 
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -4570,6 +4709,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
                     final chatEntries =
                         chatSnapshot.data?.docs
+                            .where(
+                              (doc) => !_isDeletedForUser(
+                                doc.data(),
+                                scope.selfUid,
+                              ),
+                            )
                             .map((d) => _ChatMessage.fromDoc(d))
                             .toList() ??
                         [];
@@ -4593,137 +4738,134 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final item = timelineItems[index];
-                        final isParentSender = item.senderRole == 'parent';
-                        final sideLabel = isParentSender ? 'Cha/Mẹ' : 'Con';
-                        final alignment = isParentSender
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft;
-                        final bubbleColor = isParentSender
-                          ? Colors.blue.shade50
-                          : Colors.grey.shade100;
-                        final borderColor = isParentSender
+                        final isMine = item.senderUid == scope.selfUid;
+                        final sideLabel = item.senderRole == 'parent'
+                            ? 'Cha/Mẹ'
+                            : 'Con';
+                        final alignment = item.senderRole == 'parent'
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft;
+                        final bubbleColor = item.senderRole == 'parent'
+                            ? Colors.blue.shade50
+                            : Colors.grey.shade100;
+                        final borderColor = item.senderRole == 'parent'
                             ? Colors.blue.shade200
-                          : Colors.blueGrey.shade200;
+                            : Colors.blueGrey.shade200;
+
+                        final bubble = ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 320),
+                          child: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: bubbleColor,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: borderColor),
+                            ),
+                            child: item.isChat
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        item.chat!.text,
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () =>
+                                            _openImagePreview(item.media!),
+                                        child: item.media!.isVideo
+                                            ? Container(
+                                                height: 72,
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black12,
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                child: const Center(
+                                                  child: Icon(
+                                                    Icons.videocam,
+                                                    size: 28,
+                                                  ),
+                                                ),
+                                              )
+                                            : ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                child: Image.network(
+                                                  item.media!.imageUrl,
+                                                  height: 120,
+                                                  width: double.infinity,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (_, _, _) =>
+                                                      const SizedBox(
+                                                    height: 72,
+                                                    child: Center(
+                                                      child: Icon(
+                                                        Icons.broken_image,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                      ),
+                                      if (item.media!.caption
+                                          .trim()
+                                          .isNotEmpty) ...[
+                                        const SizedBox(height: 6),
+                                        Text(item.media!.caption.trim()),
+                                      ],
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '$sideLabel • ${item.media!.isVideo ? 'Video' : 'Ảnh'} • ${_formatDateTime(item.createdAt)}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        );
 
                         return Align(
                           alignment: alignment,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 320),
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: bubbleColor,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: borderColor),
-                              ),
-                              child: item.isChat
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          item.chat!.text,
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          '$sideLabel • ${_formatDateTime(item.createdAt)}',
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.black54,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                item.media!.fileName,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Xóa media',
-                                              icon: const Icon(
-                                                Icons.delete_outline,
-                                              ),
-                                              onPressed: () => _deleteSharedMedia(
-                                                scope,
-                                                item.media!,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        GestureDetector(
-                                          onTap: () =>
-                                              _openImagePreview(item.media!),
-                                          child: item.media!.isVideo
-                                              ? Container(
-                                                  height: 72,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black12,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                      8,
-                                                    ),
-                                                  ),
-                                                  child: const Center(
-                                                    child: Icon(
-                                                      Icons.videocam,
-                                                      size: 28,
-                                                    ),
-                                                  ),
-                                                )
-                                              : ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(8),
-                                                  child: Image.network(
-                                                    item.media!.imageUrl,
-                                                    height: 120,
-                                                    width: double.infinity,
-                                                    fit: BoxFit.cover,
-                                                    errorBuilder: (_, _, _) =>
-                                                        const SizedBox(
-                                                          height: 72,
-                                                          child: Center(
-                                                            child: Icon(
-                                                              Icons.broken_image,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                  ),
-                                                ),
-                                        ),
-                                        if (item.media!.caption
-                                            .trim()
-                                            .isNotEmpty) ...[
-                                          const SizedBox(height: 6),
-                                          Text(item.media!.caption.trim()),
-                                        ],
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          '$sideLabel • ${item.media!.isVideo ? 'Video' : 'Ảnh'} • ${_formatDateTime(item.createdAt)}',
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.black54,
-                                          ),
-                                        ),
-                                      ],
+                          child: isMine
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Tùy chọn',
+                                      icon: const Icon(
+                                        Icons.more_horiz,
+                                        size: 20,
+                                      ),
+                                      onPressed: () =>
+                                          _showMyMessageActions(scope, item),
                                     ),
-                            ),
-                          ),
+                                    bubble,
+                                  ],
+                                )
+                              : bubble,
                         );
                       },
                     );

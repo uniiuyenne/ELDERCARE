@@ -111,7 +111,19 @@ service cloud.firestore {
           && request.resource.data.senderUid == request.auth.uid
           && request.resource.data.senderRole in ['parent', 'child'];
 
-        allow update, delete: if isChannelMember(channelId);
+        // Deletion rules to match UX:
+        // - Revoke (delete): only the sender can delete the media for everyone.
+        // - Delete for me (update deletedFor): any channel member can only add their own uid.
+        allow delete: if isChannelMember(channelId)
+          && resource.data.senderUid == request.auth.uid;
+
+        allow update: if isChannelMember(channelId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
+          && request.resource.data.deletedFor is list
+          && request.auth.uid in request.resource.data.deletedFor
+          && request.resource.data.deletedFor.size() >= (
+            resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+          );
       }
 
       match /chatMessages/{messageId} {
@@ -131,7 +143,19 @@ service cloud.firestore {
           && request.resource.data.senderRole in ['parent', 'child']
           && request.resource.data.createdAt == request.time;
 
-        allow update, delete: if false;
+        // Deletion rules to match UX:
+        // - Revoke (delete): only the sender can delete the message for everyone.
+        // - Delete for me (update deletedFor): any channel member can only add their own uid.
+        allow delete: if isChannelMember(channelId)
+          && resource.data.senderUid == request.auth.uid;
+
+        allow update: if isChannelMember(channelId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
+          && request.resource.data.deletedFor is list
+          && request.auth.uid in request.resource.data.deletedFor
+          && request.resource.data.deletedFor.size() >= (
+            resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+          );
       }
     }
   }
