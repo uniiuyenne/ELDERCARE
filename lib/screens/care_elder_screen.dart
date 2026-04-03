@@ -10,6 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:geolocator/geolocator.dart';
@@ -1358,6 +1359,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   };
 
   final ImagePicker _imagePicker = ImagePicker();
+  final TextEditingController _chatComposerController = TextEditingController();
+  final ValueNotifier<int> _composerUiVersion = ValueNotifier<int>(0);
   bool _loadingScope = true;
   bool _uploadingImage = false;
   bool _cancelUploadRequested = false;
@@ -1370,12 +1373,34 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   DateTime _lastProgressPaintAt = DateTime.fromMillisecondsSinceEpoch(0);
   double _lastPaintedOverallProgress = 0;
   double _lastPaintedCurrentProgress = 0;
+  int _chatLoadLimit = 30;
+  int _shareLoadLimit = 30;
+  bool _loadingOlderChats = false;
+  List<_PendingShareUpload> _pendingComposerUploads = [];
+  bool _mediaPickerActive = false;
+  _ComposerPickerMode _composerPickerMode = _ComposerPickerMode.all;
+  List<AssetEntity> _composerGalleryAssets = [];
+  final Map<String, Uint8List?> _composerThumbCache = {};
+  final Set<String> _composerThumbLoading = <String>{};
+  bool _composerGalleryLoading = false;
+  bool _composerGalleryHasMore = true;
+  int _composerGalleryPage = 0;
+  final ScrollController _composerMediaScrollController = ScrollController();
+  final ScrollController _chatTimelineScrollController = ScrollController();
+  int _lastTimelineItemCount = 0;
+  String? _lastTimelineTailKey;
   String? _scopeError;
   _FamilyScope? _scope;
+
+  void _notifyComposerUi() {
+    if (!mounted) return;
+    _composerUiVersion.value = _composerUiVersion.value + 1;
+  }
 
   @override
   void initState() {
     super.initState();
+    _composerMediaScrollController.addListener(_onComposerMediaScroll);
     _loadFamilyScope();
     if (!widget.isChildView) {
       _startLocationTracking();
@@ -1388,7 +1413,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   void dispose() {
     FocusManager.instance.primaryFocus?.unfocus();
     _activeUploadCancelToken?.cancel('disposed');
+    _chatComposerController.dispose();
+    _composerMediaScrollController.dispose();
+    _chatTimelineScrollController.dispose();
     _shareBoxUiVersion.dispose();
+    _composerUiVersion.dispose();
     _positionStreamSub?.cancel();
     _parentLocationSub?.cancel();
     super.dispose();
@@ -1692,6 +1721,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .collection('sharebox');
   }
 
+  CollectionReference<Map<String, dynamic>> _chatCollection(
+    _FamilyScope scope,
+  ) {
+    return FirebaseFirestore.instance
+        .collection('channels')
+        .doc(scope.channelId)
+        .collection('chatMessages');
+  }
+
   Stream<QuerySnapshot<Map<String, dynamic>>> _taskStream(_FamilyScope scope) {
     return _taskCollection(
       scope,
@@ -1699,9 +1737,660 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _shareStream(_FamilyScope scope) {
-    return _shareCollection(
+    return _shareStreamWithLimit(scope);
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _shareStreamWithLimit(
+    _FamilyScope scope, {
+    int? limit,
+  }) {
+    final query = _shareCollection(
       scope,
-    ).orderBy('createdAt', descending: true).snapshots();
+    ).orderBy('createdAt', descending: true);
+
+    return (limit != null ? query.limit(limit) : query).snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _chatStream(
+    _FamilyScope scope, {
+    int? limit,
+  }) {
+    final query = _chatCollection(
+      scope,
+    ).orderBy('createdAt', descending: true);
+
+    return (limit != null ? query.limit(limit) : query).snapshots();
+  }
+
+  Future<void> _sendChatMessage(_FamilyScope scope, String rawMessage) async {
+    final message = rawMessage.trim();
+    if (message.isEmpty) {
+      return;
+    }
+
+    try {
+      await _chatCollection(scope).add({
+        'text': message,
+        'senderUid': scope.selfUid,
+        'senderRole': scope.selfRole,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      FocusManager.instance.primaryFocus?.unfocus();
+    } on FirebaseException catch (e) {
+      _showMessage('Không thể gửi tin nhắn: ${e.message ?? e.code}');
+    } catch (e) {
+      _showMessage('Không thể gửi tin nhắn: $e');
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    if (_loadingOlderChats) return;
+    setState(() {
+      _loadingOlderChats = true;
+      _chatLoadLimit += 20;
+      _shareLoadLimit += 20;
+    });
+
+    // Keep the flag true briefly so the next snapshot expansion doesn't
+    // trigger auto-scroll-to-latest while the user is intentionally loading
+    // older history.
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    setState(() => _loadingOlderChats = false);
+  }
+
+  Future<void> _sendCurrentComposerMessage(_FamilyScope scope) async {
+    final raw = _chatComposerController.text.trim();
+    if (raw.isEmpty && _pendingComposerUploads.isEmpty) {
+      return;
+    }
+
+    if (_pendingComposerUploads.isEmpty && raw.isNotEmpty) {
+      await _sendChatMessage(scope, raw);
+    }
+
+    if (_pendingComposerUploads.isNotEmpty) {
+      final uploads = _pendingComposerUploads
+          .map((item) => item.copyWith(caption: ''))
+          .toList();
+      await _uploadSelectedImages(scope, uploads: uploads);
+      if (!mounted) return;
+      _pendingComposerUploads = [];
+      _notifyComposerUi();
+    }
+
+    if (!mounted) return;
+    _chatComposerController.clear();
+    if (_mediaPickerActive) {
+      _exitComposerMediaPicker();
+    }
+    _autoScrollChatToLatest(force: true);
+  }
+
+  Future<void> _captureComposerImageWithPreview(_FamilyScope scope) async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 90,
+        preferredCameraDevice: CameraDevice.rear,
+      );
+      if (picked == null) return;
+
+      final fileName = picked.name;
+      final extension = fileName.contains('.')
+          ? fileName.split('.').last.toLowerCase()
+          : '';
+      if (!_allowedExtensions.contains(extension)) {
+        _showMessage('Định dạng ảnh chưa được hỗ trợ.');
+        return;
+      }
+
+      final fileSize = await picked.length();
+      if (fileSize <= 0 || fileSize > _maxImageSizeBytes) {
+        _showMessage('Ảnh không hợp lệ hoặc vượt quá 5MB.');
+        return;
+      }
+
+      final previewBytes = await picked.readAsBytes();
+      if (!mounted) return;
+      final result = await Navigator.of(context).push<_CapturePreviewResult>(
+        MaterialPageRoute(
+          builder: (_) => _CapturePreviewPage(
+            title: 'Ảnh vừa chụp',
+            fileName: fileName,
+            isVideo: false,
+            previewBytes: previewBytes,
+          ),
+        ),
+      );
+
+      if (result?.send != true) return;
+
+      await _uploadSelectedImages(
+        scope,
+        uploads: [
+          _PendingShareUpload(
+            file: picked,
+            fileName: fileName,
+            extension: extension,
+            sizeBytes: fileSize,
+            caption: '',
+            bytes: previewBytes,
+            mediaType: _ShareMediaType.image,
+          ),
+        ],
+      );
+
+      if (_mediaPickerActive) {
+        await _loadComposerGalleryPage(reset: true);
+      }
+    } on PlatformException catch (e) {
+      _showMessage('Không thể chụp ảnh: ${e.message ?? e.code}');
+    } catch (e) {
+      _showMessage('Không thể chụp ảnh: $e');
+    }
+  }
+
+  Future<void> _captureComposerVideoWithPreview(_FamilyScope scope) async {
+    try {
+      final picked = await _imagePicker.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(minutes: 3),
+      );
+      if (picked == null) return;
+
+      final fileName = picked.name;
+      final extension = fileName.contains('.')
+          ? fileName.split('.').last.toLowerCase()
+          : '';
+      if (!_allowedVideoExtensions.contains(extension)) {
+        _showMessage('Định dạng video chưa được hỗ trợ.');
+        return;
+      }
+
+      final fileSize = await picked.length();
+      if (fileSize <= 0 || fileSize > _maxVideoSizeBytes) {
+        _showMessage('Video không hợp lệ hoặc vượt quá 40MB.');
+        return;
+      }
+
+      if (!mounted) return;
+      final result = await Navigator.of(context).push<_CapturePreviewResult>(
+        MaterialPageRoute(
+          builder: (_) => _CapturePreviewPage(
+            title: 'Video vừa quay',
+            fileName: fileName,
+            isVideo: true,
+            previewBytes: null,
+          ),
+        ),
+      );
+
+      if (result?.send != true) return;
+
+      await _uploadSelectedImages(
+        scope,
+        uploads: [
+          _PendingShareUpload(
+            file: picked,
+            fileName: fileName,
+            extension: extension,
+            sizeBytes: fileSize,
+            caption: '',
+            bytes: Uint8List(0),
+            mediaType: _ShareMediaType.video,
+          ),
+        ],
+      );
+
+      if (_mediaPickerActive) {
+        await _loadComposerGalleryPage(reset: true);
+      }
+    } on PlatformException catch (e) {
+      _showMessage('Không thể quay video: ${e.message ?? e.code}');
+    } catch (e) {
+      _showMessage('Không thể quay video: $e');
+    }
+  }
+
+  Future<void> _enterComposerMediaPicker(_ComposerPickerMode mode) async {
+    _mediaPickerActive = true;
+    _composerPickerMode = mode;
+    _chatComposerController.clear();
+    _pendingComposerUploads = [];
+    _composerGalleryAssets = [];
+    _composerThumbCache.clear();
+    _composerThumbLoading.clear();
+    _composerGalleryPage = 0;
+    _composerGalleryHasMore = true;
+    _notifyComposerUi();
+    await _loadComposerGalleryPage(reset: true);
+  }
+
+  void _exitComposerMediaPicker() {
+    _mediaPickerActive = false;
+    _pendingComposerUploads = [];
+    _composerGalleryAssets = [];
+    _composerThumbCache.clear();
+    _composerThumbLoading.clear();
+    _composerGalleryPage = 0;
+    _composerGalleryHasMore = true;
+    _notifyComposerUi();
+  }
+
+  Future<void> _prefetchComposerThumbs(List<AssetEntity> assets) async {
+    final missing = assets
+        .where(
+          (asset) =>
+              !_composerThumbCache.containsKey(asset.id) &&
+              !_composerThumbLoading.contains(asset.id),
+        )
+        .toList();
+    if (missing.isEmpty) return;
+
+    _composerThumbLoading.addAll(missing.map((e) => e.id));
+    final loaded = <String, Uint8List?>{};
+    try {
+      const batchSize = 4;
+      for (var i = 0; i < missing.length; i += batchSize) {
+        final batch = missing.skip(i).take(batchSize).toList();
+        final results = await Future.wait(
+          batch.map(
+            (asset) => asset.thumbnailDataWithSize(
+              const ThumbnailSize.square(180),
+              quality: 65,
+            ),
+          ),
+        );
+        for (var j = 0; j < batch.length; j++) {
+          loaded[batch[j].id] = results[j];
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+    } finally {
+      _composerThumbLoading.removeAll(missing.map((e) => e.id));
+    }
+
+    if (!mounted) return;
+    _composerThumbCache.addAll(loaded);
+    _notifyComposerUi();
+  }
+
+  void _onComposerMediaScroll() {
+    if (!_mediaPickerActive || _composerGalleryLoading || !_composerGalleryHasMore) {
+      return;
+    }
+    if (_composerMediaScrollController.position.extentAfter < 300) {
+      _loadComposerGalleryPage();
+    }
+  }
+
+  Future<void> _loadComposerGalleryPage({bool reset = false}) async {
+    if (_composerGalleryLoading) return;
+    if (!reset && !_composerGalleryHasMore) return;
+
+    _composerGalleryLoading = true;
+    _notifyComposerUi();
+    try {
+      final permission = await PhotoManager.requestPermissionExtend();
+      if (!permission.isAuth) {
+        _showMessage('Cần quyền truy cập thư viện để chọn media.');
+        return;
+      }
+
+      final requestType = _composerPickerMode == _ComposerPickerMode.image
+          ? RequestType.image
+          : _composerPickerMode == _ComposerPickerMode.video
+              ? RequestType.video
+              : RequestType.common;
+
+      final filterOption = FilterOptionGroup()
+        ..addOrderOption(
+          const OrderOption(type: OrderOptionType.createDate, asc: false),
+        );
+
+      final albums = await PhotoManager.getAssetPathList(
+        type: requestType,
+        onlyAll: true,
+        filterOption: filterOption,
+      );
+
+      if (albums.isEmpty) {
+        if (!mounted) return;
+        _composerGalleryAssets = [];
+        _composerGalleryHasMore = false;
+        _notifyComposerUi();
+        return;
+      }
+
+      if (reset) {
+        _composerGalleryPage = 0;
+      }
+
+      final fetched = await albums.first.getAssetListPaged(
+        page: _composerGalleryPage,
+        size: 36,
+      );
+
+      if (!mounted) return;
+      if (reset) {
+        _composerGalleryAssets = fetched;
+      } else {
+        _composerGalleryAssets = [
+          ..._composerGalleryAssets,
+          ...fetched,
+        ];
+      }
+      _composerGalleryPage += 1;
+      _composerGalleryHasMore = fetched.length == 36;
+      _notifyComposerUi();
+      unawaited(_prefetchComposerThumbs(fetched.take(18).toList()));
+    } catch (e) {
+      _showMessage('Không thể tải thư viện media: $e');
+    } finally {
+      if (mounted) {
+        _composerGalleryLoading = false;
+        _notifyComposerUi();
+      }
+    }
+  }
+
+  int _composerCameraTileCount() {
+    return _composerPickerMode == _ComposerPickerMode.all ? 2 : 1;
+  }
+
+  Widget _buildComposerCameraTile({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.blueGrey.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blueGrey.shade200),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 30, color: Colors.black54),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<_PendingShareUpload?> _buildPendingUploadFromAsset(AssetEntity asset) async {
+    final file = await asset.file;
+    if (file == null) return null;
+
+    final fileName = file.path.split(RegExp(r'[\\/]')).last;
+    final extension = fileName.contains('.')
+        ? fileName.split('.').last.toLowerCase()
+        : '';
+    final mediaType = asset.type == AssetType.video
+        ? _ShareMediaType.video
+        : _ShareMediaType.image;
+    final sizeBytes = await file.length();
+
+    if (mediaType == _ShareMediaType.image) {
+      if (!_allowedExtensions.contains(extension) ||
+          sizeBytes <= 0 ||
+          sizeBytes > _maxImageSizeBytes) {
+        _showMessage('Ảnh không hợp lệ hoặc vượt quá 5MB.');
+        return null;
+      }
+    } else {
+      if (!_allowedVideoExtensions.contains(extension) ||
+          sizeBytes <= 0 ||
+          sizeBytes > _maxVideoSizeBytes) {
+        _showMessage('Video không hợp lệ hoặc vượt quá 40MB.');
+        return null;
+      }
+    }
+
+    return _PendingShareUpload(
+      file: XFile(file.path, name: fileName),
+      fileName: fileName,
+      extension: extension,
+      sizeBytes: sizeBytes,
+      caption: '',
+      bytes: Uint8List(0),
+      mediaType: mediaType,
+      sourceId: asset.id,
+    );
+  }
+
+  int _selectedOrderForAsset(String assetId) {
+    return _pendingComposerUploads.indexWhere((item) => item.sourceId == assetId);
+  }
+
+  Future<void> _toggleComposerAsset(AssetEntity asset) async {
+    final currentIndex = _selectedOrderForAsset(asset.id);
+    if (currentIndex >= 0) {
+      _pendingComposerUploads.removeAt(currentIndex);
+      _notifyComposerUi();
+      return;
+    }
+
+    final pendingUpload = await _buildPendingUploadFromAsset(asset);
+    if (pendingUpload == null || !mounted) return;
+    _pendingComposerUploads = [..._pendingComposerUploads, pendingUpload];
+    _notifyComposerUi();
+  }
+
+  String _formatAssetDuration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildComposerGalleryTile(_FamilyScope scope, int index) {
+    final cameraTiles = _composerCameraTileCount();
+    if (index < cameraTiles) {
+      if (_composerPickerMode == _ComposerPickerMode.video) {
+        return _buildComposerCameraTile(
+          label: 'Quay video',
+          icon: Icons.videocam_outlined,
+          onTap: _uploadingImage ? null : () => _captureComposerVideoWithPreview(scope),
+        );
+      }
+
+      if (_composerPickerMode == _ComposerPickerMode.image) {
+        return _buildComposerCameraTile(
+          label: 'Chụp ảnh',
+          icon: Icons.camera_alt_outlined,
+          onTap: _uploadingImage ? null : () => _captureComposerImageWithPreview(scope),
+        );
+      }
+
+      // all-mode: show 2 separate tiles.
+      if (index == 0) {
+        return _buildComposerCameraTile(
+          label: 'Chụp ảnh',
+          icon: Icons.camera_alt_outlined,
+          onTap: _uploadingImage ? null : () => _captureComposerImageWithPreview(scope),
+        );
+      }
+      return _buildComposerCameraTile(
+        label: 'Quay video',
+        icon: Icons.videocam_outlined,
+        onTap: _uploadingImage ? null : () => _captureComposerVideoWithPreview(scope),
+      );
+    }
+
+    final assetIndex = index - cameraTiles;
+    final asset = _composerGalleryAssets[assetIndex];
+    final selectedOrder = _selectedOrderForAsset(asset.id);
+    final thumbBytes = _composerThumbCache[asset.id];
+    if (thumbBytes == null && !_composerThumbLoading.contains(asset.id)) {
+      unawaited(_prefetchComposerThumbs([asset]));
+    }
+
+    return GestureDetector(
+      onTap: _uploadingImage ? null : () => _toggleComposerAsset(asset),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (thumbBytes == null)
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Icon(Icons.image_outlined, color: Colors.black45),
+              ),
+            )
+          else
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.memory(thumbBytes, fit: BoxFit.cover),
+            ),
+          if (selectedOrder >= 0)
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blueAccent, width: 2),
+              ),
+            ),
+          if (asset.type == AssetType.video)
+            Positioned(
+              left: 6,
+              right: 6,
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.videocam, size: 12, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text(
+                      _formatAssetDuration(
+                        Duration(seconds: asset.duration),
+                      ),
+                      style: const TextStyle(fontSize: 11, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Positioned(
+            top: 6,
+            right: 6,
+            child: Container(
+              width: 22,
+              height: 22,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selectedOrder >= 0 ? Colors.blueAccent : Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selectedOrder >= 0 ? Colors.blueAccent : Colors.black38,
+                  width: 1.5,
+                ),
+              ),
+              child: selectedOrder >= 0
+                  ? Text(
+                      '${selectedOrder + 1}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComposerMediaPickerPanel(_FamilyScope scope) {
+    final mediaTitle = _composerPickerMode == _ComposerPickerMode.image
+      ? 'Ảnh'
+      : _composerPickerMode == _ComposerPickerMode.video
+        ? 'Video'
+        : 'Media';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              tooltip: 'Quay lại',
+              onPressed: _uploadingImage ? null : _exitComposerMediaPicker,
+              icon: const Icon(Icons.arrow_back),
+            ),
+            Expanded(
+              child: Text(
+                '$mediaTitle đã chọn: ${_pendingComposerUploads.length}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Gửi',
+              onPressed: _uploadingImage || _pendingComposerUploads.isEmpty
+                  ? null
+                  : () => _sendCurrentComposerMessage(scope),
+              icon: const Icon(Icons.send_rounded),
+            ),
+          ],
+        ),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.5,
+          ),
+          child: GridView.builder(
+            controller: _composerMediaScrollController,
+            padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 6,
+              crossAxisSpacing: 6,
+            ),
+            itemCount: _composerGalleryAssets.length + _composerCameraTileCount(),
+            itemBuilder: (context, index) {
+              return _buildComposerGalleryTile(scope, index);
+            },
+          ),
+        ),
+        if (_composerGalleryLoading)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: SizedBox(
+              height: 20,
+              child: Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _openImageAttachMenu(_FamilyScope scope) async {
+    await _enterComposerMediaPicker(_ComposerPickerMode.image);
+  }
+
+  Future<void> _openVideoAttachMenu(_FamilyScope scope) async {
+    await _enterComposerMediaPicker(_ComposerPickerMode.video);
   }
 
   Future<void> _showTaskDialog({
@@ -2275,8 +2964,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           });
         }
 
+        final uploadBytes =
+            item.bytes.isNotEmpty ? item.bytes : await item.file.readAsBytes();
+
         final uploaded = await CloudinaryService.uploadBytes(
-          bytes: item.bytes,
+          bytes: uploadBytes,
           fileName: item.fileName,
           folder: 'sharebox/${scope.channelId}',
           resourceType: item.mediaType == _ShareMediaType.video
@@ -2776,6 +3468,25 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return '$hh:$mm - $dd/$mon';
   }
 
+  void _autoScrollChatToLatest({bool force = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_chatTimelineScrollController.hasClients) return;
+
+      final position = _chatTimelineScrollController.position;
+      final shouldScroll = force || position.extentAfter < 220;
+      if (!shouldScroll) return;
+
+      final target = position.maxScrollExtent;
+      if ((target - position.pixels).abs() < 2) return;
+
+      _chatTimelineScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
   void _showMessage(String message) {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2949,9 +3660,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 child: SizedBox.expand(
                   child: FilledButton.icon(
                     onPressed: () => _openShareBoxBottomSheet(scope),
-                    icon: const Icon(Icons.photo_library),
+                    icon: const Icon(Icons.chat_bubble_outline),
                     label: const Text(
-                      'ShareBox',
+                      'Chat',
                       textAlign: TextAlign.center,
                     ),
                     style: FilledButton.styleFrom(
@@ -3022,8 +3733,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               child: Column(
                 children: [
                   _buildSideActionButton(
-                    icon: Icons.photo_library,
-                    tooltip: 'Mở ShareBox',
+                    icon: Icons.chat_bubble_outline,
+                    tooltip: 'Mở Chat',
                     onTap: () => _openShareBoxBottomSheet(scope),
                     size: actionButtonSize,
                   ),
@@ -3081,23 +3792,376 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   Future<void> _openShareBoxBottomSheet(_FamilyScope scope) async {
+    _chatLoadLimit = 30;
+    _shareLoadLimit = 30;
+    _lastTimelineItemCount = 0;
+    _lastTimelineTailKey = null;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('ShareBox'),
+              title: const Text('Chat'),
               backgroundColor: Colors.blueAccent,
             ),
-            body: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: _buildShareBoxCard(scope, fullScreen: true),
-              ),
-            ),
+            body: SafeArea(child: _buildChatPage(scope)),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildChatPage(_FamilyScope scope) {
+    return Column(
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _shareStreamWithLimit(scope, limit: _shareLoadLimit),
+              builder: (context, shareSnapshot) {
+                if (shareSnapshot.connectionState == ConnectionState.waiting &&
+                    !shareSnapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (shareSnapshot.hasError) {
+                  return const Center(child: Text('Không thể tải media.'));
+                }
+
+                final mediaEntries = shareSnapshot.data?.docs
+                        .map((d) => _ShareImage.fromDoc(d))
+                        .toList() ??
+                    [];
+
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _chatStream(scope, limit: _chatLoadLimit),
+                  builder: (context, chatSnapshot) {
+                    if (chatSnapshot.connectionState ==
+                            ConnectionState.waiting &&
+                        !chatSnapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (chatSnapshot.hasError) {
+                      return Container(
+                        width: double.infinity,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.red.shade200),
+                          borderRadius: BorderRadius.circular(10),
+                          color: Colors.red.shade50,
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: const Text(
+                          'Không thể tải chat. Kiểm tra Firestore Rules để cấp quyền đọc/ghi chatMessages.',
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
+
+                    final chatEntries = chatSnapshot.data?.docs
+                            .map((d) => _ChatMessage.fromDoc(d))
+                            .toList() ??
+                        [];
+
+                    final timelineItems = <_ShareTimelineItem>[
+                      ...mediaEntries.map(_ShareTimelineItem.media),
+                      ...chatEntries.map(_ShareTimelineItem.chat),
+                    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+                    final tailKey = timelineItems.isEmpty
+                        ? null
+                        : '${timelineItems.last.createdAt.millisecondsSinceEpoch}_${timelineItems.last.senderUid}_${timelineItems.length}';
+                    final hasNewTimelineItem =
+                        _lastTimelineItemCount != timelineItems.length ||
+                        _lastTimelineTailKey != tailKey;
+                    if (hasNewTimelineItem && !_loadingOlderChats) {
+                      _lastTimelineItemCount = timelineItems.length;
+                      _lastTimelineTailKey = tailKey;
+                      _autoScrollChatToLatest();
+                    }
+
+                    if (timelineItems.isEmpty) {
+                      return const Center(child: Text('Chưa có nội dung chat.'));
+                    }
+
+                    return RefreshIndicator(
+                      onRefresh: _loadOlderMessages,
+                      child: ListView.separated(
+                        controller: _chatTimelineScrollController,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.only(bottom: 10),
+                        itemCount: timelineItems.length + 1,
+                        separatorBuilder: (context, index) =>
+                          const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            return Center(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                                child: Text(
+                                  _loadingOlderChats
+                                      ? 'Đang tải thêm tin nhắn...'
+                                      : 'Kéo xuống để tải thêm tin nhắn cũ',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
+                          final item = timelineItems[index - 1];
+                            final isMine = item.senderUid == scope.selfUid;
+                            final sideLabel = item.senderRole == 'parent'
+                              ? 'Cha/Mẹ'
+                              : 'Con';
+                            final alignment = isMine
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft;
+                            final bubbleColor = isMine
+                              ? Colors.blue.shade50
+                              : Colors.grey.shade100;
+                            final borderColor = isMine
+                              ? Colors.blue.shade200
+                              : Colors.blueGrey.shade200;
+
+                          return Align(
+                            alignment: alignment,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 250),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: bubbleColor,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: borderColor),
+                                ),
+                                child: item.isChat
+                                    ? Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            item.chat!.text,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.black54,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : GestureDetector(
+                                        onTap: () =>
+                                            _openImagePreview(item.media!),
+                                        child: item.media!.isVideo
+                                            ? Container(
+                                                height: 120,
+                                                width: 170,
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black12,
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                child: const Center(
+                                                  child: Icon(
+                                                    Icons.videocam,
+                                                    size: 32,
+                                                  ),
+                                                ),
+                                              )
+                                            : ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                child: Image.network(
+                                                  item.media!.imageUrl,
+                                                  height: 130,
+                                                  width: 170,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (_, _, _) =>
+                                                      const SizedBox(
+                                                    height: 120,
+                                                    width: 170,
+                                                    child: Center(
+                                                      child: Icon(
+                                                        Icons.broken_image,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                      ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              top: BorderSide(color: Colors.blueGrey.shade100),
+            ),
+          ),
+          child: SafeArea(
+            top: false,
+            child: ValueListenableBuilder<int>(
+              valueListenable: _composerUiVersion,
+              builder: (context, composerTick, child) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_uploadingImage) ...[
+                      LinearProgressIndicator(value: _uploadProgress),
+                      const SizedBox(height: 8),
+                    ],
+                    if (_mediaPickerActive)
+                      _buildComposerMediaPickerPanel(scope),
+                    if (!_mediaPickerActive)
+                      Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Chọn ảnh',
+                            onPressed: _uploadingImage
+                                ? null
+                                : () => _openImageAttachMenu(scope),
+                            icon: const Icon(Icons.photo_library),
+                          ),
+                          IconButton(
+                            tooltip: 'Chọn video',
+                            onPressed: _uploadingImage
+                                ? null
+                                : () => _openVideoAttachMenu(scope),
+                            icon: const Icon(Icons.videocam),
+                          ),
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (_pendingComposerUploads.isEmpty)
+                                  TextField(
+                                    controller: _chatComposerController,
+                                    minLines: 1,
+                                    maxLines: 3,
+                                    textInputAction: TextInputAction.send,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Nhập tin nhắn...',
+                                    ),
+                                    onSubmitted: (_) =>
+                                        _sendCurrentComposerMessage(scope),
+                                  ),
+                                if (_pendingComposerUploads.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                '${_pendingComposerUploads.length} tệp đính kèm • ${_pendingComposerUploads.where((e) => e.mediaType == _ShareMediaType.image).length} ảnh, ${_pendingComposerUploads.where((e) => e.mediaType == _ShareMediaType.video).length} video',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.black54,
+                                                ),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () {
+                                                _pendingComposerUploads = [];
+                                                _notifyComposerUi();
+                                              },
+                                              child: const Text('Xóa'),
+                                            ),
+                                          ],
+                                        ),
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: _pendingComposerUploads
+                                              .map(
+                                                (e) => Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        Colors.blueGrey.shade50,
+                                                    borderRadius:
+                                                        BorderRadius.circular(12),
+                                                    border: Border.all(
+                                                      color: Colors
+                                                          .blueGrey.shade100,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    e.fileName,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.black87,
+                                                    ),
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blueAccent,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            margin: const EdgeInsets.only(left: 6),
+                            child: IconButton(
+                              tooltip: 'Gửi',
+                              onPressed: () =>
+                                  _sendCurrentComposerMessage(scope),
+                              icon: const Icon(
+                                Icons.send_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -3439,20 +4503,21 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildShareBoxCard(_FamilyScope scope, {bool fullScreen = false}) {
-    const listHeight = 260.0;
+    const listHeight = 380.0;
     final content = Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'ShareBox',
+              'Chat',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
             const Text(
-              'Cha/Mẹ và Con có thể gửi ảnh/video qua Cloudinary. Metadata vẫn đồng bộ realtime trên Firestore.',
+              'Khung chat chung cho tin nhắn và ảnh/video. Cha/Mẹ ở bên phải, Con ở bên trái.',
             ),
             const SizedBox(height: 10),
             _buildShareBoxUploadPanel(scope),
@@ -3460,6 +4525,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: _shareStream(scope),
               builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return const Text('Không thể tải media ShareBox.');
+                }
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Padding(
                     padding: EdgeInsets.all(16),
@@ -3467,82 +4535,208 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   );
                 }
 
-                final images =
+                final mediaEntries =
                     snapshot.data?.docs
                         .map((d) => _ShareImage.fromDoc(d))
                         .toList() ??
                     [];
-                if (images.isEmpty) {
-                  return const Text('Chưa có media nào trong ShareBox.');
-                }
 
-                final mediaList = ListView.separated(
-                  shrinkWrap: fullScreen,
-                  physics: fullScreen
-                      ? const NeverScrollableScrollPhysics()
-                      : null,
-                  itemCount: images.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final image = images[index];
-                    return Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.blueGrey.shade100),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: ListTile(
-                        onTap: () => _openImagePreview(image),
-                        leading: image.isVideo
-                            ? Container(
-                                width: 54,
-                                height: 54,
-                                decoration: BoxDecoration(
-                                  color: Colors.black12,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(Icons.videocam),
-                              )
-                            : ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  image.imageUrl,
-                                  width: 54,
-                                  height: 54,
-                                  cacheWidth: 108,
-                                  cacheHeight: 108,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const Icon(Icons.broken_image),
-                                ),
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _chatStream(scope),
+                  builder: (context, chatSnapshot) {
+                    if (chatSnapshot.hasError) {
+                      return Container(
+                        width: double.infinity,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.red.shade200),
+                          borderRadius: BorderRadius.circular(10),
+                          color: Colors.red.shade50,
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: const Text(
+                          'Không thể tải chat. Kiểm tra Firestore Rules để cấp quyền đọc/ghi chatMessages.',
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
+
+                    if (chatSnapshot.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+
+                    final chatEntries =
+                        chatSnapshot.data?.docs
+                            .map((d) => _ChatMessage.fromDoc(d))
+                            .toList() ??
+                        [];
+
+                    final timelineItems = <_ShareTimelineItem>[
+                      ...mediaEntries.map(_ShareTimelineItem.media),
+                      ...chatEntries.map(_ShareTimelineItem.chat),
+                    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+                    if (timelineItems.isEmpty) {
+                      return const Text('Chưa có nội dung nào trong Chat.');
+                    }
+
+                    final timelineList = ListView.separated(
+                      reverse: true,
+                      shrinkWrap: fullScreen,
+                      physics: fullScreen
+                          ? const NeverScrollableScrollPhysics()
+                          : null,
+                      itemCount: timelineItems.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = timelineItems[index];
+                        final isParentSender = item.senderRole == 'parent';
+                        final sideLabel = isParentSender ? 'Cha/Mẹ' : 'Con';
+                        final alignment = isParentSender
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft;
+                        final bubbleColor = isParentSender
+                          ? Colors.blue.shade50
+                          : Colors.grey.shade100;
+                        final borderColor = isParentSender
+                            ? Colors.blue.shade200
+                          : Colors.blueGrey.shade200;
+
+                        return Align(
+                          alignment: alignment,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 320),
+                            child: Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: bubbleColor,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: borderColor),
                               ),
-                        title: Text(
-                          image.fileName,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Xóa media',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _deleteSharedMedia(scope, image),
-                        ),
-                        subtitle: Text(
-                          'Từ: ${image.senderRole == 'parent' ? 'Cha/Mẹ' : 'Con'}\n'
-                          'Loại: ${image.isVideo ? 'Video' : 'Ảnh'}\n'
-                          '${image.caption.trim().isEmpty ? '' : 'Mô tả: ${image.caption.trim()}\n'}'
-                          'Lúc: ${_formatDateTime(image.createdAt)}',
-                        ),
-                      ),
+                              child: item.isChat
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.chat!.text,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.black54,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                item.media!.fileName,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ),
+                                            IconButton(
+                                              tooltip: 'Xóa media',
+                                              icon: const Icon(
+                                                Icons.delete_outline,
+                                              ),
+                                              onPressed: () => _deleteSharedMedia(
+                                                scope,
+                                                item.media!,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        GestureDetector(
+                                          onTap: () =>
+                                              _openImagePreview(item.media!),
+                                          child: item.media!.isVideo
+                                              ? Container(
+                                                  height: 72,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.black12,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                      8,
+                                                    ),
+                                                  ),
+                                                  child: const Center(
+                                                    child: Icon(
+                                                      Icons.videocam,
+                                                      size: 28,
+                                                    ),
+                                                  ),
+                                                )
+                                              : ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  child: Image.network(
+                                                    item.media!.imageUrl,
+                                                    height: 120,
+                                                    width: double.infinity,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, _, _) =>
+                                                        const SizedBox(
+                                                          height: 72,
+                                                          child: Center(
+                                                            child: Icon(
+                                                              Icons.broken_image,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ),
+                                        ),
+                                        if (item.media!.caption
+                                            .trim()
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(item.media!.caption.trim()),
+                                        ],
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          '$sideLabel • ${item.media!.isVideo ? 'Video' : 'Ảnh'} • ${_formatDateTime(item.createdAt)}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.black54,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+
+                    if (fullScreen) {
+                      return timelineList;
+                    }
+
+                    return SizedBox(
+                      height: listHeight,
+                      child: timelineList,
                     );
                   },
-                );
-
-                if (fullScreen) {
-                  return mediaList;
-                }
-
-                return SizedBox(
-                  height: listHeight,
-                  child: mediaList,
                 );
               },
             ),
@@ -3566,32 +4760,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _uploadingImage
-                      ? null
-                      : () => _pickAndUploadImage(scope, ImageSource.camera),
-                  icon: const Icon(Icons.camera_alt),
-                  label: Text(kIsWeb ? 'Chọn ảnh & gửi' : 'Chụp & gửi'),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _uploadingImage
-                      ? null
-                      : () => _pickAndUploadMultipleImages(scope),
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Chọn nhiều ảnh'),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _uploadingImage
-                      ? null
-                      : () => _pickAndUploadVideo(scope),
-                  icon: const Icon(Icons.videocam),
-                  label: const Text('Chọn video'),
-                ),
-              ],
+            FilledButton.icon(
+              onPressed: _uploadingImage ? null : () => _showShareComposer(scope),
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text('Tạo tin nhắn/ảnh/video'),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Một nút duy nhất để gửi tin nhắn, chụp ảnh, chọn nhiều ảnh hoặc chọn video trong Chat.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
@@ -3654,6 +4831,99 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         ],
                       ),
                     ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showShareComposer(_FamilyScope scope) async {
+    if (_uploadingImage) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: const Text('Gửi tin nhắn'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _showQuickMessageDialog(scope);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: Text(kIsWeb ? 'Chọn ảnh & gửi' : 'Chụp ảnh & gửi'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _pickAndUploadImage(scope, ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('Chọn nhiều ảnh'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _pickAndUploadMultipleImages(scope);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam),
+                title: const Text('Chọn video'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _pickAndUploadVideo(scope);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showQuickMessageDialog(_FamilyScope scope) async {
+    String draftMessage = '';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Gửi tin nhắn'),
+          content: TextField(
+            autofocus: true,
+            minLines: 1,
+            maxLines: 4,
+            textInputAction: TextInputAction.send,
+            onChanged: (value) => draftMessage = value,
+            onSubmitted: (_) async {
+              await _sendChatMessage(scope, draftMessage);
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            decoration: const InputDecoration(
+              hintText: 'Nhập tin nhắn cho gia đình...',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                await _sendChatMessage(scope, draftMessage);
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+              icon: const Icon(Icons.send),
+              label: const Text('Gửi'),
             ),
           ],
         );
@@ -3735,6 +5005,109 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   bool _isTaskOverdue(_TaskItem task, DateTime now) {
     return !task.completed && task.scheduledAt.isBefore(now);
+  }
+}
+
+class _CapturePreviewResult {
+  const _CapturePreviewResult({required this.send});
+
+  final bool send;
+}
+
+class _CapturePreviewPage extends StatelessWidget {
+  const _CapturePreviewPage({
+    required this.title,
+    required this.fileName,
+    required this.isVideo,
+    required this.previewBytes,
+  });
+
+  final String title;
+  final String fileName;
+  final bool isVideo;
+  final Uint8List? previewBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Center(
+                child: isVideo
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.videocam,
+                            color: Colors.white70,
+                            size: 72,
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            fileName,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      )
+                    : previewBytes == null
+                        ? const SizedBox.shrink()
+                        : InteractiveViewer(
+                            child: Image.memory(
+                              previewBytes!,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              child: IconButton(
+                tooltip: 'Quay lại',
+                onPressed: () => Navigator.of(context).pop(
+                  const _CapturePreviewResult(send: false),
+                ),
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+              ),
+            ),
+            Positioned(
+              top: 10,
+              left: 56,
+              right: 12,
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: FloatingActionButton(
+                tooltip: 'Gửi',
+                backgroundColor: Colors.blueAccent,
+                onPressed: () => Navigator.of(context).pop(
+                  const _CapturePreviewResult(send: true),
+                ),
+                child: const Icon(Icons.send_rounded, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -3879,6 +5252,7 @@ class _PendingShareUpload {
     required this.caption,
     required this.bytes,
     required this.mediaType,
+    this.sourceId,
   });
 
   final XFile file;
@@ -3888,6 +5262,7 @@ class _PendingShareUpload {
   final String caption;
   final Uint8List bytes;
   final _ShareMediaType mediaType;
+  final String? sourceId;
 
   _PendingShareUpload copyWith({
     String? caption,
@@ -3900,11 +5275,14 @@ class _PendingShareUpload {
       caption: caption ?? this.caption,
       bytes: bytes,
       mediaType: mediaType,
+      sourceId: sourceId,
     );
   }
 }
 
 enum _ShareMediaType { image, video }
+
+enum _ComposerPickerMode { all, image, video }
 
 class _TaskItem {
   const _TaskItem({
@@ -3950,6 +5328,7 @@ class _ShareImage {
     required this.fileName,
     required this.imageUrl,
     required this.mediaType,
+    required this.senderUid,
     required this.senderRole,
     required this.caption,
     required this.createdAt,
@@ -3959,6 +5338,7 @@ class _ShareImage {
   final String fileName;
   final String imageUrl;
   final String mediaType;
+  final String senderUid;
   final String senderRole;
   final String caption;
   final DateTime createdAt;
@@ -3987,10 +5367,77 @@ class _ShareImage {
       fileName: fileName,
       imageUrl: mediaUrl,
       mediaType: inferredType,
+      senderUid: (data['senderUid'] ?? '').toString(),
       senderRole: (data['senderRole'] ?? '').toString(),
       caption: (data['caption'] ?? '').toString(),
       createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
     );
   }
+}
+
+class _ChatMessage {
+  const _ChatMessage({
+    required this.id,
+    required this.text,
+    required this.senderUid,
+    required this.senderRole,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String text;
+  final String senderUid;
+  final String senderRole;
+  final DateTime createdAt;
+
+  factory _ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    final createdAt = data['createdAt'];
+    return _ChatMessage(
+      id: doc.id,
+      text: (data['text'] ?? '').toString(),
+      senderUid: (data['senderUid'] ?? '').toString(),
+      senderRole: (data['senderRole'] ?? '').toString(),
+      createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+    );
+  }
+}
+
+class _ShareTimelineItem {
+  const _ShareTimelineItem._({
+    required this.chat,
+    required this.media,
+    required this.createdAt,
+    required this.senderUid,
+    required this.senderRole,
+  });
+
+  factory _ShareTimelineItem.chat(_ChatMessage message) {
+    return _ShareTimelineItem._(
+      chat: message,
+      media: null,
+      createdAt: message.createdAt,
+      senderUid: message.senderUid,
+      senderRole: message.senderRole,
+    );
+  }
+
+  factory _ShareTimelineItem.media(_ShareImage media) {
+    return _ShareTimelineItem._(
+      chat: null,
+      media: media,
+      createdAt: media.createdAt,
+      senderUid: media.senderUid,
+      senderRole: media.senderRole,
+    );
+  }
+
+  final _ChatMessage? chat;
+  final _ShareImage? media;
+  final DateTime createdAt;
+  final String senderUid;
+  final String senderRole;
+
+  bool get isChat => chat != null;
 }
 

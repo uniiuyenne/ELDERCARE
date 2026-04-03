@@ -1,0 +1,138 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isChannelMember(channelId) {
+      return signedIn() && (
+          channelId.matches('^' + request.auth.uid + '_.*') ||
+          channelId.matches('.*_' + request.auth.uid + '$'));
+    }
+
+    function isChildAccount() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'child';
+    }
+
+    function isParentAccount() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'parent';
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isSelf(userId);
+    }
+
+    match /channels/{channelId} {
+      allow read: if isChannelMember(channelId);
+      allow create, update, delete: if isChannelMember(channelId) && isChildAccount();
+
+      match /tasks/{taskId} {
+        allow read: if isChannelMember(channelId);
+
+        allow create: if isChannelMember(channelId)
+          && isChildAccount()
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.scheduledAt is timestamp
+          && request.resource.data.completed is bool;
+
+        allow update: if isChannelMember(channelId)
+          && (
+            (
+              isChildAccount()
+              && request.resource.data.title is string
+              && request.resource.data.title.size() > 0
+              && request.resource.data.scheduledAt is timestamp
+              && request.resource.data.completed is bool
+            )
+            ||
+            (
+              isParentAccount()
+              && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+                'completed',
+                'checkedAt',
+                'checkedByUid',
+                'checkedByRole',
+                'updatedAt',
+                'updatedByUid',
+                'updatedByRole'
+              ])
+              && request.resource.data.completed is bool
+              && request.resource.data.updatedAt == request.time
+              && request.resource.data.updatedByUid == request.auth.uid
+              && request.resource.data.updatedByRole == 'parent'
+              && (
+                (
+                  request.resource.data.completed == true
+                  && request.resource.data.checkedAt == request.time
+                  && request.resource.data.checkedByUid == request.auth.uid
+                  && request.resource.data.checkedByRole == 'parent'
+                )
+                ||
+                (
+                  request.resource.data.completed == false
+                  && request.resource.data.checkedAt == null
+                  && request.resource.data.checkedByUid == null
+                  && request.resource.data.checkedByRole == null
+                )
+              )
+            )
+          );
+
+        allow delete: if isChannelMember(channelId) && isChildAccount();
+      }
+
+      match /sharebox/{shareId} {
+        allow read: if isChannelMember(channelId);
+
+        allow create: if isChannelMember(channelId)
+          && request.resource.data.mediaUrl is string
+          && request.resource.data.mediaUrl.size() > 0
+          && request.resource.data.imageUrl is string
+          && request.resource.data.imageUrl.size() > 0
+          && request.resource.data.fileName is string
+          && request.resource.data.fileName.size() > 0
+          && request.resource.data.mediaType in ['image', 'video']
+          && request.resource.data.sizeBytes is int
+          && request.resource.data.sizeBytes > 0
+          && (
+            (request.resource.data.mediaType == 'image' && request.resource.data.sizeBytes <= 5 * 1024 * 1024)
+            ||
+            (request.resource.data.mediaType == 'video' && request.resource.data.sizeBytes <= 40 * 1024 * 1024)
+          )
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderRole in ['parent', 'child'];
+
+        allow update, delete: if isChannelMember(channelId);
+      }
+
+      match /chatMessages/{messageId} {
+        allow read: if isChannelMember(channelId);
+
+        allow create: if isChannelMember(channelId)
+          && request.resource.data.keys().hasOnly([
+            'text',
+            'senderUid',
+            'senderRole',
+            'createdAt'
+          ])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderRole in ['parent', 'child']
+          && request.resource.data.createdAt == request.time;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

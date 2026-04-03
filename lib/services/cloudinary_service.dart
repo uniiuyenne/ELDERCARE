@@ -23,9 +23,11 @@ class CloudinaryService {
 
   static const String _cloudName = String.fromEnvironment(
     'CLOUDINARY_CLOUD_NAME',
+    defaultValue: 'dggbnsm78',
   );
   static const String _uploadPreset = String.fromEnvironment(
     'CLOUDINARY_UPLOAD_PRESET',
+    defaultValue: 'eldercare_unsigned',
   );
 
   static bool get isConfigured =>
