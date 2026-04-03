@@ -2171,6 +2171,33 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
+  Future<void> _openGoogleMaps(double lat, double lng) async {
+    final webUrl = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+
+    // Try native map intents first, then fallback to web URL.
+    final candidates = <Uri>[
+      Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
+      Uri.parse('google.navigation:q=$lat,$lng'),
+      webUrl,
+    ];
+
+    for (final uri in candidates) {
+      try {
+        final launched = await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) return;
+      } catch (_) {
+        // Ignore and continue to the next fallback URI.
+      }
+    }
+
+    _showMessage('Không mở được Google Maps trên thiết bị này.');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2496,9 +2523,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             : 'Chưa cập nhật';
 
         final hasLocation = lat != null && lng != null;
-        final mapsUrl = hasLocation
-            ? 'https://www.google.com/maps/search/?api=1&query=$lat,$lng'
-            : '';
 
         final tile = Padding(
           padding: const EdgeInsets.all(10),
@@ -2547,11 +2571,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: () async {
-                    if (!await canLaunchUrl(Uri.parse(mapsUrl))) return;
-                    await launchUrl(
-                      Uri.parse(mapsUrl),
-                      mode: LaunchMode.externalApplication,
-                    );
+                    await _openGoogleMaps(lat.toDouble(), lng.toDouble());
                   },
                   icon: const Icon(Icons.location_on),
                   label: const Text('Mở Google Maps'),
