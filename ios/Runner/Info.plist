@@ -45,13 +45,17 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Ứng dụng cần dùng camera để chụp ảnh và chia sẻ cho thành viên gia đình.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Ứng dụng cần quyền truy cập thư viện ảnh để chọn ảnh chia sẻ cho thành viên gia đình.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Ứng dụng cần quyền lưu ảnh khi bạn chụp và chia sẻ ảnh trong ShareBox.</string>
 </dict>
 </plist>
-
-<!-- Quyền truy cập vị trí cho iOS -->
-<key>NSLocationWhenInUseUsageDescription</key>
-<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
-<key>NSLocationAlwaysUsageDescription</key>
-<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
-<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-<string>Ứng dụng cần truy cập vị trí của bạn để hỗ trợ chăm sóc người cao tuổi.</string>
