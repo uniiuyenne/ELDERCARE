@@ -49,7 +49,7 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    const goldSeed = Color(0xFFD4AF37);
+    const goldSeed = Color(0xFFFFCC33);
     const warmLightBackground = Color(0xFFF8F2E3);
     const warmDarkBackground = Color(0xFF121212);
     final lightScheme = ColorScheme.fromSeed(
@@ -65,6 +65,7 @@ class _MyAppState extends State<MyApp> {
 
     return MaterialApp(
       title: 'CareElder',
+       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
         colorScheme: lightScheme,

@@ -118,11 +118,31 @@ service cloud.firestore {
           && resource.data.senderUid == request.auth.uid;
 
         allow update: if isChannelMember(channelId)
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
-          && request.resource.data.deletedFor is list
-          && request.auth.uid in request.resource.data.deletedFor
-          && request.resource.data.deletedFor.size() >= (
-            resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+          && (
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
+              && request.resource.data.deletedFor is list
+              && request.auth.uid in request.resource.data.deletedFor
+              && request.resource.data.deletedFor.size() >= (
+                resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+              )
+            )
+            ||
+            (
+              resource.data.senderUid == request.auth.uid
+              && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+                'revoked',
+                'revokedAt',
+                'revokedByUid',
+                'revokedByRole',
+                'updatedAt'
+              ])
+              && request.resource.data.revoked == true
+              && request.resource.data.revokedAt == request.time
+              && request.resource.data.revokedByUid == request.auth.uid
+              && request.resource.data.revokedByRole in ['parent', 'child']
+              && request.resource.data.updatedAt == request.time
+            )
           );
       }
 
@@ -150,11 +170,31 @@ service cloud.firestore {
           && resource.data.senderUid == request.auth.uid;
 
         allow update: if isChannelMember(channelId)
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
-          && request.resource.data.deletedFor is list
-          && request.auth.uid in request.resource.data.deletedFor
-          && request.resource.data.deletedFor.size() >= (
-            resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+          && (
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
+              && request.resource.data.deletedFor is list
+              && request.auth.uid in request.resource.data.deletedFor
+              && request.resource.data.deletedFor.size() >= (
+                resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+              )
+            )
+            ||
+            (
+              resource.data.senderUid == request.auth.uid
+              && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+                'revoked',
+                'revokedAt',
+                'revokedByUid',
+                'revokedByRole',
+                'updatedAt'
+              ])
+              && request.resource.data.revoked == true
+              && request.resource.data.revokedAt == request.time
+              && request.resource.data.revokedByUid == request.auth.uid
+              && request.resource.data.revokedByRole in ['parent', 'child']
+              && request.resource.data.updatedAt == request.time
+            )
           );
       }
     }

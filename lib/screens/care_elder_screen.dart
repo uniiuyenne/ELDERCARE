@@ -458,9 +458,17 @@ class _CareElderScreenState extends State<CareElderScreen>
         title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.health_and_safety),
+            Icon(Icons.health_and_safety, color: Colors.white),
             SizedBox(width: 8),
-            Text('CareElder', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+              'CareElder',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+                fontSize: 20,
+                letterSpacing: 0.3,
+              ),
+            ),
           ],
         ),
         centerTitle: true,
@@ -1409,6 +1417,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     'webm',
     '3gp',
   };
+  static const List<String> _parentSuggestedMessages = [
+    'Con ăn cơm chưa?',
+    'Rảnh thì gọi điện cho bố mẹ nhé!',
+    'Hôm nào con về nhà?',
+    'Bố mẹ gọi không thấy con nghe máy, con có bận không?',
+    'Hôm nay bố hơi mệt.',
+    'Hôm nay mẹ hơi mệt.',
+  ];
 
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _chatComposerController = TextEditingController();
@@ -1608,7 +1624,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final createdAt = data['createdAt'];
     if (createdAt is! Timestamp) return false;
 
-    if (cutoffMillis <= 0) return false;
+    if (cutoffMillis <= 0) return true;
 
     return createdAt.millisecondsSinceEpoch > cutoffMillis;
   }
@@ -1631,7 +1647,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     int cutoffMillis,
   ) {
     if (item.senderUid == selfUid) return false;
-    if (cutoffMillis <= 0) return false;
+    if (cutoffMillis <= 0) return true;
     return item.createdAt.millisecondsSinceEpoch > cutoffMillis;
   }
 
@@ -1876,16 +1892,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     if (item.isUnread) {
       // Unread: use type-specific colors
       if (item.type == _TaskNotificationType.completed) {
-        backgroundColor = Colors.green.shade100;
-        borderColor = Colors.green.shade300;
+        backgroundColor = Colors.green.shade200;
+        borderColor = Colors.green.shade400;
       } else {
-        backgroundColor = Colors.red.shade100;
-        borderColor = Colors.red.shade300;
+        backgroundColor = Colors.red.shade200;
+        borderColor = Colors.red.shade400;
       }
     } else {
       // Read: use grey color
-      backgroundColor = Colors.grey.shade100;
-      borderColor = Colors.grey.shade300;
+      backgroundColor = Colors.grey.shade200;
+      borderColor = Colors.grey.shade400;
     }
 
     // Text color: black when unread, grey when read
@@ -1994,11 +2010,45 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
     try {
       if (item.isChat) {
-        await _chatCollection(scope).doc(item.chat!.id).delete();
+        await _chatCollection(scope).doc(item.chat!.id).set({
+          'revoked': true,
+          'revokedAt': FieldValue.serverTimestamp(),
+          'revokedByUid': scope.selfUid,
+          'revokedByRole': scope.selfRole,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       } else {
-        await _shareCollection(scope).doc(item.media!.id).delete();
+        await _shareCollection(scope).doc(item.media!.id).set({
+          'revoked': true,
+          'revokedAt': FieldValue.serverTimestamp(),
+          'revokedByUid': scope.selfUid,
+          'revokedByRole': scope.selfRole,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       }
     } on FirebaseException catch (e) {
+      // Fallback for projects that still run older Firestore rules
+      // which only allow hard-delete for revoke.
+      if (e.code == 'permission-denied') {
+        try {
+          if (item.isChat) {
+            await _chatCollection(scope).doc(item.chat!.id).delete();
+          } else {
+            await _shareCollection(scope).doc(item.media!.id).delete();
+          }
+          _showMessage('Đã thu hồi tin nhắn theo chế độ tương thích.');
+          return;
+        } on FirebaseException catch (fallbackError) {
+          _showMessage(
+            'Không thể thu hồi: ${fallbackError.message ?? fallbackError.code}',
+          );
+          return;
+        } catch (fallbackError) {
+          _showMessage('Không thể thu hồi: $fallbackError');
+          return;
+        }
+      }
+
       _showMessage('Không thể thu hồi: ${e.message ?? e.code}');
     } catch (e) {
       _showMessage('Không thể thu hồi: $e');
@@ -3288,6 +3338,24 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       return;
     }
 
+     // Kiểm tra quyền cho parent: không cho phép mark/unmark tasks sau deadline
+     if (scope.selfRole == 'parent') {
+       final now = DateTime.now();
+       final isTaskPastDeadline = task.scheduledAt.isBefore(now);
+
+       // Không cho phép mark hoàn thành task đã quá hạn
+       if (completed && isTaskPastDeadline && !task.completed) {
+         _showMessage('Không thể hoàn thành công việc đã quá hạn.');
+         return;
+       }
+
+       // Không cho phép bỏ check hoàn thành cho task đã quá hạn
+       if (!completed && task.completed && isTaskPastDeadline) {
+         _showMessage('Không thể bỏ hoàn thành công việc đã quá hạn.');
+         return;
+       }
+     }
+
     try {
       await _taskCollection(scope).doc(task.id).set({
         'completed': completed,
@@ -4150,7 +4218,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
                 return Scaffold(
                   appBar: AppBar(
-                    title: const Text('Quản lý tài khoản'),
+                    title: const Text(
+                      'Quản lý tài khoản',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
                     backgroundColor: Theme.of(context).colorScheme.primary,
                   ),
                   body: SafeArea(
@@ -4580,6 +4655,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           widget.isChildView
               ? 'Tài Khoản Con'
               : 'Tài Khoản Cha Mẹ',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            fontSize: 20,
+            letterSpacing: 0.3,
+          ),
         ),
         backgroundColor: Theme.of(context).colorScheme.primary,
         actions: [
@@ -4645,10 +4726,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 children: [
                   // Địa chỉ chi tiết
                   Container(
+                    width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.blue.shade200),
                     ),
                     child: Column(
@@ -4658,7 +4740,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           'Địa chỉ chi tiết:',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.grey,
+                            color: Colors.black54,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -4668,6 +4750,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
                           style: const TextStyle(
                             fontSize: 14,
+                            color: Colors.black87,
                             fontWeight: FontWeight.w500,
                             height: 1.5,
                           ),
@@ -4718,7 +4801,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       textAlign: TextAlign.center,
                     ),
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
+                      backgroundColor: const Color(0xFFB71C1C),
                       foregroundColor: Colors.white,
                       iconSize: 26,
                       padding: const EdgeInsets.symmetric(
@@ -4737,33 +4820,101 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 ),
               ),
               const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox.expand(
-                  child: FilledButton.icon(
-                    onPressed: () => _openShareBoxBottomSheet(scope),
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('ShareBox', textAlign: TextAlign.center),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.primary,
-                      foregroundColor: Colors.white,
-                      iconSize: 26,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 10,
-                      ),
-                      textStyle: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              _buildParentShareBoxButton(scope),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParentShareBoxButton(_FamilyScope scope) {
+    return Expanded(
+      child: SizedBox.expand(
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _shareStream(scope),
+          builder: (context, mediaSnapshot) {
+            final mediaDocs = mediaSnapshot.data?.docs ?? const [];
+            final unreadMediaCount = _countUnreadShareBoxItems(
+              mediaDocs,
+              scope.selfUid,
+              _shareboxLastSeenMillis,
+            );
+
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _chatStream(scope),
+              builder: (context, chatSnapshot) {
+                final chatDocs = chatSnapshot.data?.docs ?? const [];
+                final unreadChatCount = _countUnreadShareBoxItems(
+                  chatDocs,
+                  scope.selfUid,
+                  _shareboxLastSeenMillis,
+                );
+                final unreadCount = unreadMediaCount + unreadChatCount;
+                final badgeText = unreadCount > 99 ? '99+' : '$unreadCount';
+
+                return FilledButton.icon(
+                  onPressed: () => _openShareBoxBottomSheet(scope),
+                  icon: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      const Icon(Icons.photo_library),
+                      if (unreadCount > 0)
+                        Positioned(
+                          top: -8,
+                          right: -12,
+                          child: Container(
+                            constraints: const BoxConstraints(
+                              minWidth: 18,
+                              minHeight: 18,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade700,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: Colors.white, width: 1),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              badgeText,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  label: Text(
+                    unreadCount > 0 ? 'ShareBox ($badgeText)' : 'ShareBox',
+                    textAlign: TextAlign.center,
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    iconSize: 26,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
         ),
       ),
     );
@@ -4894,7 +5045,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         builder: (_) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('Thống kê công việc'),
+              title: const Text(
+                'Thống kê công việc',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                  letterSpacing: 0.3,
+                ),
+              ),
               backgroundColor: Theme.of(context).colorScheme.primary,
             ),
             body: SafeArea(
@@ -5026,7 +5185,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       MaterialPageRoute<void>(
         builder: (context) => Scaffold(
           appBar: AppBar(
-            title: const Text('ShareBox'),
+            title: const Text(
+              'ShareBox',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 20,
+                letterSpacing: 0.3,
+              ),
+            ),
             backgroundColor: Theme.of(context).colorScheme.primary,
           ),
           body: SafeArea(
@@ -5042,7 +5209,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     await _markShareBoxAsSeen(scope);
   }
 
-  Future<void> _scrollToShareBoxUnreadDivider() async {
+  Future<void> _scrollToShareBoxUnreadDivider({int attempt = 0}) async {
     final dividerContext = _shareboxUnreadDividerKey.currentContext;
     if (dividerContext != null) {
       await Scrollable.ensureVisible(
@@ -5054,10 +5221,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       return;
     }
 
+    if (attempt >= 8) {
+      _autoScrollChatToLatest(force: true);
+      return;
+    }
+
     if (_chatTimelineScrollController.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          _scrollToShareBoxUnreadDivider();
+          _scrollToShareBoxUnreadDivider(attempt: attempt + 1);
         }
       });
     }
@@ -5172,7 +5344,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       handledInitialJump = true;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (firstUnreadIndex >= 0) {
-                          _scrollToShareBoxUnreadDivider();
+                          _scrollToShareBoxUnreadDivider(attempt: 0);
                         } else {
                           _autoScrollChatToLatest(force: true);
                         }
@@ -5244,12 +5416,18 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               final alignment = isMine
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft;
-                              final bubbleColor = isMine
-                                  ? Colors.blue.shade50
-                                  : Colors.grey.shade100;
-                              final borderColor = isMine
-                                  ? Colors.blue.shade200
-                                  : Colors.blueGrey.shade200;
+                              final isRevoked = item.isRevoked;
+                              final revokedAt = item.revokedAt;
+                              final bubbleColor = isRevoked
+                                  ? Colors.grey.shade200
+                                  : (isMine
+                                        ? Colors.blue.shade50
+                                        : Colors.grey.shade100);
+                              final borderColor = isRevoked
+                                  ? Colors.grey.shade400
+                                  : (isMine
+                                        ? Colors.blue.shade200
+                                        : Colors.blueGrey.shade200);
                               final bubble = ConstrainedBox(
                                 constraints: const BoxConstraints(maxWidth: 250),
                                 child: Container(
@@ -5259,7 +5437,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(color: borderColor),
                                   ),
-                                  child: item.isChat
+                                  child: isRevoked
+                                      ? Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Tin nhắn đã được thu hồi lúc ${_formatDateTime(revokedAt ?? item.createdAt)}',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.grey.shade700,
+                                                fontStyle: FontStyle.italic,
+                                              ),
+                                            ),
+                                          ],
+                                        )
+                                      : item.isChat
                                       ? Column(
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
@@ -5407,6 +5600,30 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   children: [
                     if (_uploadingImage) ...[
                       LinearProgressIndicator(value: _uploadProgress),
+                      const SizedBox(height: 8),
+                    ],
+                    if (!_mediaPickerActive && scope.selfRole == 'parent') ...[
+                      SizedBox(
+                        height: 38,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _parentSuggestedMessages.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 8),
+                          itemBuilder: (context, index) {
+                            final message = _parentSuggestedMessages[index];
+                            return ActionChip(
+                              label: Text(
+                                message,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onPressed: _uploadingImage
+                                  ? null
+                                  : () => _sendChatMessage(scope, message),
+                            );
+                          },
+                        ),
+                      ),
                       const SizedBox(height: 8),
                     ],
                     if (_mediaPickerActive)
@@ -5816,8 +6033,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .add(Duration(days: _distributionWeekOffset * 7));
     final weekEnd = weekStart.add(const Duration(days: 7));
     final weekTasks = tasks.where((task) {
-      final createdAt = task.createdAt;
-      return !createdAt.isBefore(weekStart) && createdAt.isBefore(weekEnd);
+      final scheduledAt = task.scheduledAt;
+      return !scheduledAt.isBefore(weekStart) && scheduledAt.isBefore(weekEnd);
     }).toList();
 
     final dailyBuckets = List.generate(
@@ -5827,7 +6044,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final dailyTasks = List.generate(7, (_) => <_TaskItem>[]);
 
     for (final task in weekTasks) {
-      final dayIndex = task.createdAt.difference(weekStart).inDays;
+      final dayIndex = task.scheduledAt.difference(weekStart).inDays;
       if (dayIndex < 0 || dayIndex > 6) continue;
 
       dailyTasks[dayIndex].add(task);
@@ -5982,21 +6199,21 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                               Expanded(
                                                 flex: completed,
                                                 child: _buildTaskChartSegment(
-                                                  color: Colors.green.shade400,
+                                                  color: const Color.fromARGB(255, 182, 255, 114),
                                                 ),
                                               ),
                                             if (overdue > 0)
                                               Expanded(
                                                 flex: overdue,
                                                 child: _buildTaskChartSegment(
-                                                  color: Colors.red.shade400,
+                                                  color: const Color.fromARGB(255, 255, 117, 115),
                                                 ),
                                               ),
                                             if (pending > 0)
                                               Expanded(
                                                 flex: pending,
                                                 child: _buildTaskChartSegment(
-                                                  color: Colors.orange.shade400,
+                                                  color: const Color.fromARGB(255, 255, 242, 95),
                                                 ),
                                               ),
                                           ],
@@ -6041,14 +6258,149 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           if (maxDailyTotal > 0) ...[
             const SizedBox(height: 8),
             Text(
-              'Cột thể hiện số công việc được giao trong ngày, phần màu chồng lên nhau thể hiện trạng thái hiện tại.',
+              '',
               style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade600),
             ),
           ],
+          const SizedBox(height: 20),
+          _buildCompletionRateChart(tasks: tasks),
         ],
       ),
     );
   }
+
+  Widget _buildCompletionRateChart({required List<_TaskItem> tasks}) {
+    final now = DateTime.now();
+    
+    // Chỉ tính những công việc đã đến deadline hoặc đã hoàn thành
+    final dueTasks = tasks.where((task) {
+      return task.scheduledAt.isBefore(now) || task.completed;
+    }).toList();
+    
+    if (dueTasks.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Center(
+          child: Text(
+            'Không có công việc nào đến deadline để thống kê.',
+            style: TextStyle(color: _adaptiveTextSecondary),
+          ),
+        ),
+      );
+    }
+    
+    final completedCount = dueTasks.where((task) => task.completed).length;
+    final overdueCount = dueTasks.where((task) => !task.completed && _isTaskOverdue(task, now)).length;
+    final totalDue = dueTasks.length;
+    final completionRate = (completedCount / totalDue * 100).toStringAsFixed(1);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Biểu đồ thể hiện tỉ lệ hoàn thành công việc',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: _adaptiveTextPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 180,
+                  child: CustomPaint(
+                    painter: _PieChartPainter(
+                      completedCount: completedCount.toDouble(),
+                      overdueCount: overdueCount.toDouble(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$completionRate%',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.green.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Hoàn thành',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blueGrey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        color: Colors.green.shade400,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$completedCount',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        color: Colors.red.shade400,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$overdueCount',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tổng: $totalDue',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _adaptiveTextSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildChartLegendChip(String label, Color color) {
     return Expanded(
@@ -6211,10 +6563,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                       ? 'Đã hoàn thành'
                                       : (isOverdue ? 'Đã hết hạn' : 'Chưa hoàn thành');
                                   final statusColor = task.completed
-                                      ? Colors.green.shade700
+                                      ? Colors.green.shade400
                                       : (isOverdue
-                                          ? Colors.red.shade700
-                                          : Colors.orange.shade700);
+                                          ? Colors.red.shade400
+                                          : Colors.orange.shade400);
 
                                   return Container(
                                     padding: const EdgeInsets.all(12),
@@ -6366,10 +6718,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.orange.withValues(alpha: 0.12),
+                                color: Colors.orange.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: Colors.orange.withValues(alpha: 0.35),
+                                  color: Colors.orange.withValues(alpha: 0.5),
                                 ),
                               ),
                               alignment: Alignment.center,
@@ -6398,10 +6750,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.red.withValues(alpha: 0.1),
+                                color: Colors.red.withValues(alpha: 0.18),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: Colors.red.withValues(alpha: 0.32),
+                                  color: Colors.red.withValues(alpha: 0.45),
                                 ),
                               ),
                               alignment: Alignment.center,
@@ -6430,10 +6782,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.12),
+                                color: Colors.green.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: Colors.green.withValues(alpha: 0.35),
+                                  color: Colors.green.withValues(alpha: 0.5),
                                 ),
                               ),
                               alignment: Alignment.center,
@@ -6963,8 +7315,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
         return Container(
           decoration: BoxDecoration(
-            color: highlightColor.withValues(alpha: 0.08),
-            border: Border.all(color: highlightColor.withValues(alpha: 0.35)),
+            color: highlightColor.withValues(alpha: 0.15),
+            border: Border.all(color: highlightColor.withValues(alpha: 0.5)),
             borderRadius: BorderRadius.circular(10),
           ),
           child: ListTile(
@@ -7021,6 +7373,26 @@ class _AdminMenuSheet extends StatefulWidget {
 }
 
 class _AdminMenuSheetState extends State<_AdminMenuSheet> {
+  bool? _isDarkMode;
+
+  bool get _effectiveDarkMode => _isDarkMode ?? widget.isDarkMode;
+
+  @override
+  void initState() {
+    super.initState();
+    _isDarkMode = widget.isDarkMode;
+  }
+
+  @override
+  void didUpdateWidget(covariant _AdminMenuSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isDarkMode != widget.isDarkMode) {
+      setState(() {
+        _isDarkMode = widget.isDarkMode;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -7036,10 +7408,13 @@ class _AdminMenuSheetState extends State<_AdminMenuSheet> {
               onTap: () => Navigator.of(context).pop('account'),
             ),
             SwitchListTile(
-              value: widget.isDarkMode,
+              value: _effectiveDarkMode,
               onChanged: widget.onToggleDarkMode == null
                   ? null
                   : (value) {
+                      setState(() {
+                        _isDarkMode = value;
+                      });
                       widget.onToggleDarkMode!(value);
                     },
               title: const Text('Chế độ tối'),
@@ -7328,6 +7703,65 @@ enum _ShareMediaType { image, video }
 
 enum _ComposerPickerMode { all, image, video }
 
+class _PieChartPainter extends CustomPainter {
+  final double completedCount;
+  final double overdueCount;
+
+  _PieChartPainter({
+    required this.completedCount,
+    required this.overdueCount,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2 - 16;
+    
+    final total = completedCount + overdueCount;
+    
+    // Paint the completed part (green)
+    final completedAngle = (completedCount / total) * 2 * math.pi;
+    final completedPaint = Paint()
+      ..color = Colors.green.shade400
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      completedAngle,
+      true,
+      completedPaint,
+    );
+    
+    // Paint the overdue part (red)
+    final overduePaint = Paint()
+      ..color = Colors.red.shade400
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2 + completedAngle,
+      (overdueCount / total) * 2 * math.pi,
+      true,
+      overduePaint,
+    );
+    
+    // Draw border
+    final borderPaint = Paint()
+      ..color = Colors.grey.shade300
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    
+    canvas.drawCircle(center, radius, borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PieChartPainter oldDelegate) {
+    return oldDelegate.completedCount != completedCount ||
+        oldDelegate.overdueCount != overdueCount;
+  }
+}
+
 class _TaskItem {
   const _TaskItem({
     required this.id,
@@ -7400,6 +7834,8 @@ class _ShareImage {
     required this.senderRole,
     required this.caption,
     required this.createdAt,
+    required this.isRevoked,
+    required this.revokedAt,
   });
 
   final String id;
@@ -7410,12 +7846,15 @@ class _ShareImage {
   final String senderRole;
   final String caption;
   final DateTime createdAt;
+  final bool isRevoked;
+  final DateTime? revokedAt;
 
   bool get isVideo => mediaType == 'video';
 
   factory _ShareImage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
     final createdAt = data['createdAt'];
+    final revokedAt = data['revokedAt'];
     final fileName = (data['fileName'] ?? '').toString();
     final legacyUrl = (data['imageUrl'] ?? '').toString();
     final mediaUrl = (data['mediaUrl'] ?? legacyUrl).toString();
@@ -7439,6 +7878,8 @@ class _ShareImage {
       senderRole: (data['senderRole'] ?? '').toString(),
       caption: (data['caption'] ?? '').toString(),
       createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+      isRevoked: data['revoked'] == true,
+      revokedAt: revokedAt is Timestamp ? revokedAt.toDate() : null,
     );
   }
 }
@@ -7450,6 +7891,8 @@ class _ChatMessage {
     required this.senderUid,
     required this.senderRole,
     required this.createdAt,
+    required this.isRevoked,
+    required this.revokedAt,
   });
 
   final String id;
@@ -7457,16 +7900,21 @@ class _ChatMessage {
   final String senderUid;
   final String senderRole;
   final DateTime createdAt;
+  final bool isRevoked;
+  final DateTime? revokedAt;
 
   factory _ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
     final createdAt = data['createdAt'];
+    final revokedAt = data['revokedAt'];
     return _ChatMessage(
       id: doc.id,
       text: (data['text'] ?? '').toString(),
       senderUid: (data['senderUid'] ?? '').toString(),
       senderRole: (data['senderRole'] ?? '').toString(),
       createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+      isRevoked: data['revoked'] == true,
+      revokedAt: revokedAt is Timestamp ? revokedAt.toDate() : null,
     );
   }
 }
@@ -7507,4 +7955,14 @@ class _ShareTimelineItem {
   final String senderRole;
 
   bool get isChat => chat != null;
+
+  bool get isRevoked {
+    if (isChat) return chat!.isRevoked;
+    return media!.isRevoked;
+  }
+
+  DateTime? get revokedAt {
+    if (isChat) return chat!.revokedAt;
+    return media!.revokedAt;
+  }
 }
