@@ -1,4 +1,5 @@
 ﻿import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,9 +18,17 @@ import 'package:geolocator/geolocator.dart';
 import '../services/background_location_service.dart';
 import '../services/location_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/emergency_contact_service.dart';
 
 class CareElderScreen extends StatefulWidget {
-  const CareElderScreen({super.key});
+  const CareElderScreen({
+    super.key,
+    this.isDarkMode = false,
+    this.onToggleDarkMode,
+  });
+
+  final bool isDarkMode;
+  final ValueChanged<bool>? onToggleDarkMode;
 
   @override
   State<CareElderScreen> createState() => _CareElderScreenState();
@@ -42,6 +51,10 @@ class _CareElderScreenState extends State<CareElderScreen>
   bool _phoneLocked = false;
   bool _isDisposing = false;
   String _serverPhone = '';
+
+  Color get _brandColor => Theme.of(context).colorScheme.primary;
+  Color get _surfaceTextColor => Theme.of(context).colorScheme.onSurface;
+  Color get _surfaceColor => Theme.of(context).colorScheme.surface;
 
   late AnimationController _animationController;
   StreamSubscription<User?>? _authSub;
@@ -196,7 +209,7 @@ class _CareElderScreenState extends State<CareElderScreen>
         }
 
         final data = (await userDocRef.get()).data() ?? {};
-  if (!mounted || _isDisposing) return;
+        if (!mounted || _isDisposing) return;
         _serverPhone = (data['phone'] ?? '').toString().trim();
         _phoneLocked = data['phoneLocked'] == true;
         _userPhoneController.text = _serverPhone;
@@ -334,7 +347,15 @@ class _CareElderScreenState extends State<CareElderScreen>
 
       final route = MaterialPageRoute(
         builder: (_) =>
-            role == 'child' ? const ChildHomePage() : const ParentHomePage(),
+            role == 'child'
+                ? ChildHomePage(
+                    isDarkMode: widget.isDarkMode,
+                    onToggleDarkMode: widget.onToggleDarkMode,
+                  )
+                : ParentHomePage(
+                    isDarkMode: widget.isDarkMode,
+                    onToggleDarkMode: widget.onToggleDarkMode,
+                  ),
       );
       FocusManager.instance.primaryFocus?.unfocus();
       await Navigator.of(context).pushReplacement(route);
@@ -443,12 +464,15 @@ class _CareElderScreenState extends State<CareElderScreen>
           ],
         ),
         centerTitle: true,
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: Theme.of(context).colorScheme.primary,
       ),
       body: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.blueAccent, Colors.lightBlueAccent],
+            colors: [
+              Theme.of(context).colorScheme.primary.withValues(alpha: 0.22),
+              Theme.of(context).colorScheme.surface,
+            ],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -485,10 +509,10 @@ class _CareElderScreenState extends State<CareElderScreen>
         stepWidget = _buildRoleLinkStep();
         break;
       default:
-        stepWidget = const Center(
+        stepWidget = Center(
           child: Text(
             'Hoàn thành',
-            style: TextStyle(fontSize: 24, color: Colors.white),
+            style: TextStyle(fontSize: 24, color: _surfaceTextColor),
           ),
         );
     }
@@ -509,14 +533,14 @@ class _CareElderScreenState extends State<CareElderScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.login, size: 64, color: Colors.blueAccent),
+                Icon(Icons.login, size: 64, color: _brandColor),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'Đăng nhập bằng Google',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Colors.blueAccent,
+                    color: _brandColor,
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -524,10 +548,10 @@ class _CareElderScreenState extends State<CareElderScreen>
                   onPressed: _signInWithGoogle,
                   style: ElevatedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 60),
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black87,
+                    backgroundColor: _surfaceColor,
+                    foregroundColor: _surfaceTextColor,
                   ),
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.login,
                     size: 28,
                     color: Colors.redAccent,
@@ -538,9 +562,12 @@ class _CareElderScreenState extends State<CareElderScreen>
                           width: 24,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text(
+                      : Text(
                           'Đăng nhập với Google',
-                          style: TextStyle(fontSize: 18, color: Colors.black87),
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: _surfaceTextColor,
+                          ),
                         ),
                 ),
               ],
@@ -568,15 +595,15 @@ class _CareElderScreenState extends State<CareElderScreen>
                 const Icon(
                   Icons.phone_android,
                   size: 64,
-                  color: Colors.blueAccent,
+                  color: Colors.amber,
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'Nhập Số Điện Thoại',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Colors.blueAccent,
+                    color: _brandColor,
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -596,18 +623,21 @@ class _CareElderScreenState extends State<CareElderScreen>
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
+                      : Text(
                           'Lưu số điện thoại',
-                          style: TextStyle(fontSize: 18),
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: Theme.of(context).colorScheme.onPrimary,
+                          ),
                         ),
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: () => _signOut(),
                   icon: const Icon(Icons.logout),
-                  label: const Text(
+                  label: Text(
                     'Đăng xuất',
-                    style: TextStyle(fontSize: 16),
+                    style: TextStyle(fontSize: 16, color: _surfaceTextColor),
                   ),
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 52),
@@ -640,30 +670,14 @@ class _CareElderScreenState extends State<CareElderScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.check_circle, size: 64, color: Colors.green),
+                  Icon(Icons.check_circle, size: 64, color: Colors.green.shade600),
                   const SizedBox(height: 16),
                   Text(
                     isLinked
                         ? 'Đã liên kết với cha/mẹ: ${_parentPhoneController.text}'
                         : 'Đã liên kết với con: ${_childPhoneController.text}',
-                    style: const TextStyle(fontSize: 18, color: Colors.black87),
+                    style: TextStyle(fontSize: 18, color: _surfaceTextColor),
                     textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: () async {
-                      final role = _role;
-                      if (role == 'child' || role == 'parent') {
-                        await _showRoleSuccessAndNavigate(role!);
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 60),
-                    ),
-                    child: const Text(
-                      'Hoàn thành',
-                      style: TextStyle(fontSize: 18),
-                    ),
                   ),
                 ],
               ),
@@ -686,14 +700,14 @@ class _CareElderScreenState extends State<CareElderScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.people, size: 64, color: Colors.blueAccent),
+                Icon(Icons.people, size: 64, color: _brandColor),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'Chọn vai trò',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Colors.blueAccent,
+                    color: _brandColor,
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -748,9 +762,9 @@ class _CareElderScreenState extends State<CareElderScreen>
                 OutlinedButton.icon(
                   onPressed: () => _signOut(),
                   icon: const Icon(Icons.logout),
-                  label: const Text(
+                  label: Text(
                     'Đăng xuất',
-                    style: TextStyle(fontSize: 16),
+                    style: TextStyle(fontSize: 16, color: _surfaceTextColor),
                   ),
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 52),
@@ -1266,7 +1280,7 @@ class _CareElderScreenState extends State<CareElderScreen>
     messenger.showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: Theme.of(context).colorScheme.primary,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
@@ -1304,40 +1318,78 @@ class _CareElderScreenState extends State<CareElderScreen>
 }
 
 class ChildHomePage extends StatelessWidget {
-  const ChildHomePage({super.key});
+  const ChildHomePage({
+    super.key,
+    this.isDarkMode = false,
+    this.onToggleDarkMode,
+  });
+
+  final bool isDarkMode;
+  final ValueChanged<bool>? onToggleDarkMode;
 
   @override
   Widget build(BuildContext context) {
-    return const _FamilyHomePage(isChildView: true);
+    return _FamilyHomePage(
+      isChildView: true,
+      isDarkMode: isDarkMode,
+      onToggleDarkMode: onToggleDarkMode,
+    );
   }
 }
 
 class ParentHomePage extends StatelessWidget {
-  const ParentHomePage({super.key});
+  const ParentHomePage({
+    super.key,
+    this.isDarkMode = false,
+    this.onToggleDarkMode,
+  });
+
+  final bool isDarkMode;
+  final ValueChanged<bool>? onToggleDarkMode;
 
   @override
   Widget build(BuildContext context) {
-    return const _FamilyHomePage(isChildView: false);
+    return _FamilyHomePage(
+      isChildView: false,
+      isDarkMode: isDarkMode,
+      onToggleDarkMode: onToggleDarkMode,
+    );
   }
 }
 
 class _FamilyHomePage extends StatefulWidget {
-  const _FamilyHomePage({required this.isChildView});
+  const _FamilyHomePage({
+    required this.isChildView,
+    this.isDarkMode = false,
+    this.onToggleDarkMode,
+  });
 
   final bool isChildView;
+  final bool isDarkMode;
+  final ValueChanged<bool>? onToggleDarkMode;
 
   @override
   State<_FamilyHomePage> createState() => _FamilyHomePageState();
 }
 
 class _FamilyHomePageState extends State<_FamilyHomePage> {
-    // Biến vị trí
-    Position? _currentPosition;
-    String? _currentAddress;
-    StreamSubscription<Position>? _positionStreamSub;
-    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
-      _parentLocationSub;
-    bool _updatingLocation = false;
+  Color get _adaptiveTextPrimary =>
+      Theme.of(context).brightness == Brightness.dark
+      ? Colors.white
+      : Colors.black87;
+  Color get _adaptiveTextSecondary =>
+      Theme.of(context).brightness == Brightness.dark
+      ? Colors.white70
+      : Colors.black54;
+
+  // Biến vị trí
+  Position? _currentPosition;
+  String? _currentAddress;
+  StreamSubscription<Position>? _positionStreamSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _parentLocationSub;
+  bool _updatingLocation = false;
+
   static const int _maxImageSizeBytes = 5 * 1024 * 1024;
   static const int _maxVideoSizeBytes = 40 * 1024 * 1024;
   static const String _alwaysPermissionPromptKeyPrefix =
@@ -1387,15 +1439,507 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   int _composerGalleryPage = 0;
   final ScrollController _composerMediaScrollController = ScrollController();
   final ScrollController _chatTimelineScrollController = ScrollController();
+  final GlobalKey _shareboxUnreadDividerKey = GlobalKey();
   int _lastTimelineItemCount = 0;
   String? _lastTimelineTailKey;
+  bool _forceScrollShareBoxLatestOnNextBuild = false;
+  bool _forceScrollShareBoxUnreadOnNextBuild = false;
+  int _distributionWeekOffset = 0;
   String? _scopeError;
   _FamilyScope? _scope;
+  Set<String> _readNotificationIds = <String>{};
+  Set<String> _deletedNotificationIds = <String>{};
+  int _shareboxLastSeenMillis = 0;
+  bool _notificationPanelSessionActive = false;
+  Set<String> _notificationPanelOpenedUnreadIds = <String>{};
+  Set<String> _notificationPanelTouchedIds = <String>{};
+  late final ValueNotifier<int> _notificationStatusChanged = ValueNotifier<int>(0);
 
-  bool _isDeletedForUser(
+  Widget _buildNotificationAction() {
+    final scope = _scope;
+    if (scope == null) {
+      return IconButton(
+        tooltip: 'Thông báo',
+        onPressed: _openNotificationsPanel,
+        icon: Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.2),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: const Icon(Icons.notifications_none, size: 19),
+        ),
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _taskCollection(scope).snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        final notifications = _buildTaskNotifications(docs);
+        final unreadCount = notifications.where((item) => item.isUnread).length;
+
+        return IconButton(
+          tooltip: 'Thông báo',
+          onPressed: _openNotificationsPanel,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
+                ),
+                child: const Icon(Icons.notifications_none, size: 19),
+              ),
+              if (unreadCount > 0)
+                Positioned(
+                  right: -2,
+                  top: -3,
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      unreadCount > 99 ? '99+' : '$unreadCount',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _loadNotificationStates(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    final read = prefs.getStringList(_notificationReadKey(scope)) ?? const [];
+    final deleted =
+        prefs.getStringList(_notificationDeletedKey(scope)) ?? const [];
+
+    setState(() {
+      _readNotificationIds = read.toSet();
+      _deletedNotificationIds = deleted.toSet();
+    });
+  }
+
+  Future<void> _saveNotificationStates(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _notificationReadKey(scope),
+      _readNotificationIds.toList(),
+    );
+    await prefs.setStringList(
+      _notificationDeletedKey(scope),
+      _deletedNotificationIds.toList(),
+    );
+  }
+
+  Future<void> _loadShareBoxSeenState(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _shareboxLastSeenKey(scope);
+    final hasSavedValue = prefs.containsKey(key);
+    final seenMillis = hasSavedValue
+        ? (prefs.getInt(key) ?? 0)
+        : DateTime.now().millisecondsSinceEpoch;
+
+    if (!hasSavedValue) {
+      await prefs.setInt(key, seenMillis);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _shareboxLastSeenMillis = seenMillis;
+    });
+  }
+
+  Future<void> _markShareBoxAsSeen(_FamilyScope scope) async {
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    if (mounted) {
+      setState(() {
+        _shareboxLastSeenMillis = nowMillis;
+      });
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_shareboxLastSeenKey(scope), nowMillis);
+  }
+
+  String _shareboxLastSeenKey(_FamilyScope scope) {
+    return 'sharebox.lastSeen.${scope.selfUid}.${scope.channelId}';
+  }
+
+  String _notificationReadKey(_FamilyScope scope) {
+    return 'notifications.read.${scope.selfUid}.${scope.channelId}';
+  }
+
+  String _notificationDeletedKey(_FamilyScope scope) {
+    return 'notifications.deleted.${scope.selfUid}.${scope.channelId}';
+  }
+
+  bool _isUnreadShareBoxItem(
     Map<String, dynamic> data,
-    String uid,
+    String selfUid,
+    int cutoffMillis,
   ) {
+    final senderUid = (data['senderUid'] ?? '').toString();
+    if (senderUid == selfUid) return false;
+
+    final createdAt = data['createdAt'];
+    if (createdAt is! Timestamp) return false;
+
+    if (cutoffMillis <= 0) return false;
+
+    return createdAt.millisecondsSinceEpoch > cutoffMillis;
+  }
+
+  int _countUnreadShareBoxItems(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    String selfUid,
+    int cutoffMillis,
+  ) {
+    return docs.where((doc) {
+      final data = doc.data();
+      if (_isDeletedForUser(data, selfUid)) return false;
+      return _isUnreadShareBoxItem(data, selfUid, cutoffMillis);
+    }).length;
+  }
+
+  bool _isUnreadShareBoxTimelineItem(
+    _ShareTimelineItem item,
+    String selfUid,
+    int cutoffMillis,
+  ) {
+    if (item.senderUid == selfUid) return false;
+    if (cutoffMillis <= 0) return false;
+    return item.createdAt.millisecondsSinceEpoch > cutoffMillis;
+  }
+
+  DateTime _startOfWeekMonday(DateTime value) {
+    final dateOnly = DateTime(value.year, value.month, value.day);
+    final weekday = dateOnly.weekday;
+    return dateOnly.subtract(Duration(days: weekday - 1));
+  }
+
+  String _shortDayLabel(DateTime date) {
+    switch (date.weekday) {
+      case DateTime.monday:
+        return 'T2';
+      case DateTime.tuesday:
+        return 'T3';
+      case DateTime.wednesday:
+        return 'T4';
+      case DateTime.thursday:
+        return 'T5';
+      case DateTime.friday:
+        return 'T6';
+      case DateTime.saturday:
+        return 'T7';
+      default:
+        return 'CN';
+    }
+  }
+
+  String _formatDayMonth(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
+  }
+
+  List<_TaskNotification> _buildTaskNotifications(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    if (!widget.isChildView) {
+      return <_TaskNotification>[];
+    }
+
+    final now = DateTime.now();
+    final notifications = <_TaskNotification>[];
+
+    for (final doc in docs) {
+      final data = doc.data();
+      final title = (data['title'] ?? 'Công việc').toString();
+      final note = (data['note'] ?? '').toString();
+      final completed = data['completed'] == true;
+      final checkedAt = data['checkedAt'];
+      final checkedByRole = (data['checkedByRole'] ?? '').toString();
+      final scheduledAt = data['scheduledAt'];
+      final scheduledTime = scheduledAt is Timestamp
+          ? scheduledAt.toDate()
+          : DateTime.now();
+
+      if (completed && checkedByRole == 'parent' && checkedAt is Timestamp) {
+        final eventAt = checkedAt.toDate();
+        final id = '${doc.id}_completed_${eventAt.millisecondsSinceEpoch}';
+        if (_deletedNotificationIds.contains(id)) {
+          continue;
+        }
+
+        notifications.add(
+          _TaskNotification(
+            id: id,
+            taskId: doc.id,
+            title: title,
+            note: note,
+            type: _TaskNotificationType.completed,
+            eventAt: eventAt,
+            scheduledAt: scheduledTime,
+            isUnread: !_readNotificationIds.contains(id),
+          ),
+        );
+        continue;
+      }
+
+      if (!completed &&
+          scheduledAt is Timestamp &&
+          scheduledAt.toDate().isBefore(now)) {
+        final eventAt = scheduledAt.toDate();
+        final id = '${doc.id}_overdue_${eventAt.millisecondsSinceEpoch}';
+        if (_deletedNotificationIds.contains(id)) {
+          continue;
+        }
+
+        notifications.add(
+          _TaskNotification(
+            id: id,
+            taskId: doc.id,
+            title: title,
+            note: note,
+            type: _TaskNotificationType.overdue,
+            eventAt: eventAt,
+            scheduledAt: scheduledTime,
+            isUnread: !_readNotificationIds.contains(id),
+          ),
+        );
+      }
+    }
+
+    notifications.sort((a, b) => b.eventAt.compareTo(a.eventAt));
+
+    return notifications;
+  }
+
+  Future<void> _setNotificationReadStatus(
+    _FamilyScope scope,
+    String notificationId,
+    bool isRead,
+  ) async {
+    if (_notificationPanelSessionActive) {
+      _notificationPanelTouchedIds.add(notificationId);
+    }
+
+    setState(() {
+      if (isRead) {
+        _readNotificationIds.add(notificationId);
+      } else {
+        _readNotificationIds.remove(notificationId);
+      }
+    });
+    
+    // Trigger immediate UI update in notification panel
+    _notificationStatusChanged.value++;
+    
+    await _saveNotificationStates(scope);
+  }
+
+  Future<void> _deleteNotification(
+    _FamilyScope scope,
+    String notificationId,
+  ) async {
+    if (_notificationPanelSessionActive) {
+      _notificationPanelTouchedIds.add(notificationId);
+    }
+
+    setState(() {
+      _deletedNotificationIds.add(notificationId);
+      _readNotificationIds.remove(notificationId);
+    });
+    
+    // Trigger immediate UI update in notification panel
+    _notificationStatusChanged.value++;
+    
+    await _saveNotificationStates(scope);
+  }
+
+  Future<void> _openTaskDetailFromNotification(
+    _FamilyScope scope,
+    _TaskNotification notification,
+  ) async {
+    final taskDoc = await _taskCollection(scope).doc(notification.taskId).get();
+    if (!mounted) return;
+
+    if (!taskDoc.exists) {
+      _showMessage('Công việc đã bị xóa hoặc không còn tồn tại.');
+      return;
+    }
+
+    final task = _TaskItem.fromDoc(taskDoc);
+    final statusText = task.completed ? 'Đã hoàn thành' : 'Chưa hoàn thành';
+    final completedAt = task.checkedAt != null
+        ? _formatExactDateTime(task.checkedAt!)
+        : 'Chưa có';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(task.title.toUpperCase()),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ghi chú: ${task.note.isEmpty ? '(trống)' : task.note}'),
+              const SizedBox(height: 8),
+              Text('Thời hạn: ${_formatExactDateTime(task.scheduledAt)}'),
+              const SizedBox(height: 4),
+              Text('Trạng thái: $statusText'),
+              const SizedBox(height: 4),
+              Text('Hoàn thành lúc: $completedAt'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Đóng'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _handleNotificationAction(
+    _FamilyScope scope,
+    _TaskNotification item,
+    String value,
+  ) async {
+    if (value == 'delete') {
+      await _deleteNotification(scope, item.id);
+      return;
+    }
+
+    if (value == 'mark_read') {
+      await _setNotificationReadStatus(scope, item.id, true);
+      return;
+    }
+
+    if (value == 'mark_unread') {
+      await _setNotificationReadStatus(scope, item.id, false);
+    }
+  }
+
+  String _notificationHeadline(_TaskNotification item) {
+    if (item.type == _TaskNotificationType.completed) {
+      return 'Cha/Mẹ đã hoàn thành "${item.title}"';
+    }
+    return 'Cha/Mẹ chưa hoàn thành "${item.title}" (đã quá hạn)';
+  }
+
+  IconData _notificationIcon(_TaskNotification item) {
+    return item.type == _TaskNotificationType.completed
+        ? Icons.notifications_active
+        : Icons.warning_amber_rounded;
+  }
+
+  Color _notificationIconColor(_TaskNotification item) {
+    return item.type == _TaskNotificationType.completed
+        ? Theme.of(context).colorScheme.primary
+        : Colors.orange;
+  }
+
+  Widget _buildNotificationTile(_FamilyScope scope, _TaskNotification item) {
+    final relative = _formatRelativeTime(item.eventAt);
+    final exact = _formatExactDateTime(item.eventAt);
+
+    // Determine background and border colors based on read status and notification type
+    final Color backgroundColor;
+    final Color borderColor;
+    
+    if (item.isUnread) {
+      // Unread: use type-specific colors
+      if (item.type == _TaskNotificationType.completed) {
+        backgroundColor = Colors.green.shade100;
+        borderColor = Colors.green.shade300;
+      } else {
+        backgroundColor = Colors.red.shade100;
+        borderColor = Colors.red.shade300;
+      }
+    } else {
+      // Read: use grey color
+      backgroundColor = Colors.grey.shade100;
+      borderColor = Colors.grey.shade300;
+    }
+
+    // Text color: black when unread, grey when read
+    final Color textColor = item.isUnread ? Colors.black87 : Colors.black54;
+    final Color subtitleColor = item.isUnread ? Colors.black54 : Colors.black38;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: borderColor,
+        ),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+        leading: Icon(
+          _notificationIcon(item),
+          color: _notificationIconColor(item),
+        ),
+        title: Text(
+          _notificationHeadline(item),
+          style: TextStyle(
+            fontWeight: item.isUnread ? FontWeight.w700 : FontWeight.w500,
+            color: textColor,
+          ),
+        ),
+        subtitle: Text(
+          '$relative\n$exact',
+          style: TextStyle(color: subtitleColor),
+        ),
+        isThreeLine: true,
+        trailing: PopupMenuButton<String>(
+          tooltip: 'Tùy chọn thông báo',
+          onSelected: (value) => _handleNotificationAction(scope, item, value),
+          itemBuilder: (_) => [
+            const PopupMenuItem<String>(
+              value: 'delete',
+              child: Text('Xóa thông báo'),
+            ),
+            PopupMenuItem<String>(
+              value: item.isUnread ? 'mark_read' : 'mark_unread',
+              child: Text(
+                item.isUnread ? 'Đánh dấu đã đọc' : 'Đánh dấu chưa đọc',
+              ),
+            ),
+          ],
+        ),
+        onTap: () => _openTaskDetailFromNotification(scope, item),
+      ),
+    );
+  }
+
+  bool _isDeletedForUser(Map<String, dynamic> data, String uid) {
     final deletedFor = data['deletedFor'];
     if (deletedFor is! List) return false;
     return deletedFor.any((e) => e?.toString() == uid);
@@ -1624,19 +2168,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           distanceFilter: 10,
         ),
       );
-      _positionStreamSub = locationStream.listen((pos) async {
-        if (!mounted) return;
-        setState(() => _currentPosition = pos);
-        final address = await LocationService.getAddressFromLatLng(
-          pos.latitude,
-          pos.longitude,
-        );
-        if (!mounted) return;
-        setState(() => _currentAddress = address);
-        await _updateLocationToFirestore(pos, address);
-      }, onError: (error) {
-        _showMessage('Không thể theo dõi vị trí realtime: $error');
-      });
+      _positionStreamSub = locationStream.listen(
+        (pos) async {
+          if (!mounted) return;
+          setState(() => _currentPosition = pos);
+          final address = await LocationService.getAddressFromLatLng(
+            pos.latitude,
+            pos.longitude,
+          );
+          if (!mounted) return;
+          setState(() => _currentAddress = address);
+          await _updateLocationToFirestore(pos, address);
+        },
+        onError: (error) {
+          _showMessage('Không thể theo dõi vị trí realtime: $error');
+        },
+      );
 
       // Lấy vị trí lần đầu
       final pos = await LocationService.getCurrentPosition();
@@ -1668,7 +2215,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           'lng': pos.longitude,
           'address': address,
           'updatedAt': FieldValue.serverTimestamp(),
-        }
+        },
       }, SetOptions(merge: true));
     } catch (_) {}
     _updatingLocation = false;
@@ -1681,7 +2228,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     // Lấy uid cha/mẹ
-    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
     if (!mounted) return;
     final parentUid = (doc.data()?['parentUid'] ?? '').toString();
     if (parentUid.isEmpty) return;
@@ -1691,27 +2241,27 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .doc(parentUid)
         .snapshots()
         .listen((snap) {
-      if (!mounted) return;
-      final data = snap.data();
-      if (data != null && data['location'] != null) {
-        final loc = data['location'];
-        setState(() {
-          _currentPosition = Position(
-            latitude: (loc['lat'] ?? 0).toDouble(),
-            longitude: (loc['lng'] ?? 0).toDouble(),
-            timestamp: DateTime.now(),
-            accuracy: 0,
-            altitude: 0,
-            heading: 0,
-            speed: 0,
-            speedAccuracy: 0,
-            altitudeAccuracy: 0,
-            headingAccuracy: 0,
-          );
-          _currentAddress = loc['address']?.toString();
+          if (!mounted) return;
+          final data = snap.data();
+          if (data != null && data['location'] != null) {
+            final loc = data['location'];
+            setState(() {
+              _currentPosition = Position(
+                latitude: (loc['lat'] ?? 0).toDouble(),
+                longitude: (loc['lng'] ?? 0).toDouble(),
+                timestamp: DateTime.now(),
+                accuracy: 0,
+                altitude: 0,
+                heading: 0,
+                speed: 0,
+                speedAccuracy: 0,
+                altitudeAccuracy: 0,
+                headingAccuracy: 0,
+              );
+              _currentAddress = loc['address']?.toString();
+            });
+          }
         });
-      }
-    });
   }
 
   Future<void> _loadFamilyScope() async {
@@ -1790,17 +2340,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       final ids = [user.uid, partnerUid]..sort();
       final channelId = '${ids.first}_${ids.last}';
 
+      final loadedScope = _FamilyScope(
+        selfUid: user.uid,
+        partnerUid: partnerUid,
+        channelId: channelId,
+        selfRole: widget.isChildView ? 'child' : 'parent',
+        partnerRole: partnerRole,
+      );
+
       if (!mounted) return;
       setState(() {
-        _scope = _FamilyScope(
-          selfUid: user.uid,
-          partnerUid: partnerUid,
-          channelId: channelId,
-          selfRole: widget.isChildView ? 'child' : 'parent',
-          partnerRole: partnerRole,
-        );
+        _scope = loadedScope;
         _loadingScope = false;
       });
+
+      await _loadNotificationStates(loadedScope);
+      await _loadShareBoxSeenState(loadedScope);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1862,9 +2417,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _FamilyScope scope, {
     int? limit,
   }) {
-    final query = _chatCollection(
-      scope,
-    ).orderBy('createdAt', descending: true);
+    final query = _chatCollection(scope).orderBy('createdAt', descending: true);
 
     return (limit != null ? query.limit(limit) : query).snapshots();
   }
@@ -2124,7 +2677,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   void _onComposerMediaScroll() {
-    if (!_mediaPickerActive || _composerGalleryLoading || !_composerGalleryHasMore) {
+    if (!_mediaPickerActive ||
+        _composerGalleryLoading ||
+        !_composerGalleryHasMore) {
       return;
     }
     if (_composerMediaScrollController.position.extentAfter < 300) {
@@ -2148,8 +2703,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       final requestType = _composerPickerMode == _ComposerPickerMode.image
           ? RequestType.image
           : _composerPickerMode == _ComposerPickerMode.video
-              ? RequestType.video
-              : RequestType.common;
+          ? RequestType.video
+          : RequestType.common;
 
       final filterOption = FilterOptionGroup()
         ..addOrderOption(
@@ -2183,10 +2738,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       if (reset) {
         _composerGalleryAssets = fetched;
       } else {
-        _composerGalleryAssets = [
-          ..._composerGalleryAssets,
-          ...fetched,
-        ];
+        _composerGalleryAssets = [..._composerGalleryAssets, ...fetched];
       }
       _composerGalleryPage += 1;
       _composerGalleryHasMore = fetched.length == 36;
@@ -2223,11 +2775,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 30, color: Colors.black54),
+            Icon(icon, size: 30, color: _adaptiveTextSecondary),
             const SizedBox(height: 6),
             Text(
               label,
-              style: const TextStyle(fontSize: 12, color: Colors.black54),
+              style: TextStyle(fontSize: 12, color: _adaptiveTextSecondary),
               textAlign: TextAlign.center,
             ),
           ],
@@ -2236,7 +2788,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Future<_PendingShareUpload?> _buildPendingUploadFromAsset(AssetEntity asset) async {
+  Future<_PendingShareUpload?> _buildPendingUploadFromAsset(
+    AssetEntity asset,
+  ) async {
     final file = await asset.file;
     if (file == null) return null;
 
@@ -2278,7 +2832,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   int _selectedOrderForAsset(String assetId) {
-    return _pendingComposerUploads.indexWhere((item) => item.sourceId == assetId);
+    return _pendingComposerUploads.indexWhere(
+      (item) => item.sourceId == assetId,
+    );
   }
 
   Future<void> _toggleComposerAsset(AssetEntity asset) async {
@@ -2308,7 +2864,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         return _buildComposerCameraTile(
           label: 'Quay video',
           icon: Icons.videocam_outlined,
-          onTap: _uploadingImage ? null : () => _captureComposerVideoWithPreview(scope),
+          onTap: _uploadingImage
+              ? null
+              : () => _captureComposerVideoWithPreview(scope),
         );
       }
 
@@ -2316,7 +2874,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         return _buildComposerCameraTile(
           label: 'Chụp ảnh',
           icon: Icons.camera_alt_outlined,
-          onTap: _uploadingImage ? null : () => _captureComposerImageWithPreview(scope),
+          onTap: _uploadingImage
+              ? null
+              : () => _captureComposerImageWithPreview(scope),
         );
       }
 
@@ -2325,13 +2885,17 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         return _buildComposerCameraTile(
           label: 'Chụp ảnh',
           icon: Icons.camera_alt_outlined,
-          onTap: _uploadingImage ? null : () => _captureComposerImageWithPreview(scope),
+          onTap: _uploadingImage
+              ? null
+              : () => _captureComposerImageWithPreview(scope),
         );
       }
       return _buildComposerCameraTile(
         label: 'Quay video',
         icon: Icons.videocam_outlined,
-        onTap: _uploadingImage ? null : () => _captureComposerVideoWithPreview(scope),
+        onTap: _uploadingImage
+            ? null
+            : () => _captureComposerVideoWithPreview(scope),
       );
     }
 
@@ -2367,7 +2931,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blueAccent, width: 2),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 2,
+                ),
               ),
             ),
           if (asset.type == AssetType.video)
@@ -2387,9 +2954,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     const Icon(Icons.videocam, size: 12, color: Colors.white),
                     const SizedBox(width: 4),
                     Text(
-                      _formatAssetDuration(
-                        Duration(seconds: asset.duration),
-                      ),
+                      _formatAssetDuration(Duration(seconds: asset.duration)),
                       style: const TextStyle(fontSize: 11, color: Colors.white),
                     ),
                   ],
@@ -2404,10 +2969,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               height: 22,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: selectedOrder >= 0 ? Colors.blueAccent : Colors.white,
+                color: selectedOrder >= 0
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.white,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: selectedOrder >= 0 ? Colors.blueAccent : Colors.black38,
+                  color: selectedOrder >= 0
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.black38,
                   width: 1.5,
                 ),
               ),
@@ -2430,8 +2999,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Widget _buildComposerMediaPickerPanel(_FamilyScope scope) {
     final mediaTitle = _composerPickerMode == _ComposerPickerMode.image
-      ? 'Ảnh'
-      : _composerPickerMode == _ComposerPickerMode.video
+        ? 'Ảnh'
+        : _composerPickerMode == _ComposerPickerMode.video
         ? 'Video'
         : 'Media';
 
@@ -2472,7 +3041,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               mainAxisSpacing: 6,
               crossAxisSpacing: 6,
             ),
-            itemCount: _composerGalleryAssets.length + _composerCameraTileCount(),
+            itemCount:
+                _composerGalleryAssets.length + _composerCameraTileCount(),
             itemBuilder: (context, index) {
               return _buildComposerGalleryTile(scope, index);
             },
@@ -2483,9 +3053,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             padding: EdgeInsets.only(top: 8),
             child: SizedBox(
               height: 20,
-              child: Center(
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           ),
       ],
@@ -2804,7 +3372,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ],
       );
     } on PlatformException catch (e) {
-      _showMessage('Không thể chọn ảnh trên thiết bị này: ${e.message ?? e.code}');
+      _showMessage(
+        'Không thể chọn ảnh trên thiết bị này: ${e.message ?? e.code}',
+      );
     } catch (e) {
       _showMessage('Không thể xử lý ảnh đã chọn: $e');
     }
@@ -2826,7 +3396,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           ? fileName.split('.').last.toLowerCase()
           : '';
       if (!_allowedVideoExtensions.contains(extension)) {
-        _showMessage('Video không hợp lệ. Chỉ hỗ trợ MP4, MOV, M4V, WEBM, 3GP.');
+        _showMessage(
+          'Video không hợp lệ. Chỉ hỗ trợ MP4, MOV, M4V, WEBM, 3GP.',
+        );
         return;
       }
 
@@ -2867,7 +3439,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ],
       );
     } on PlatformException catch (e) {
-      _showMessage('Không thể chọn video trên thiết bị này: ${e.message ?? e.code}');
+      _showMessage(
+        'Không thể chọn video trên thiết bị này: ${e.message ?? e.code}',
+      );
     } catch (e) {
       _showMessage('Không thể xử lý video đã chọn: $e');
     }
@@ -2899,9 +3473,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       color: Colors.black12,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Center(
-                      child: Icon(Icons.videocam, size: 56),
-                    ),
+                    child: const Center(child: Icon(Icons.videocam, size: 56)),
                   )
                 else
                   ClipRRect(
@@ -2923,7 +3495,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 const SizedBox(height: 4),
                 Text(
                   'Dung lượng: ${(fileSize / 1024).toStringAsFixed(1)} KB',
-                  style: const TextStyle(color: Colors.black54),
+                  style: TextStyle(color: _adaptiveTextSecondary),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -3004,7 +3576,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       }
 
       if (validUploads.isEmpty) {
-        _showMessage('Không có ảnh hợp lệ để gửi (định dạng hoặc dung lượng > 5MB).');
+        _showMessage(
+          'Không có ảnh hợp lệ để gửi (định dạng hoặc dung lượng > 5MB).',
+        );
         return;
       }
 
@@ -3018,7 +3592,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       }
 
       for (var i = 0; i < validUploads.length; i++) {
-        validUploads[i] = validUploads[i].copyWith(caption: batchCaption.trim());
+        validUploads[i] = validUploads[i].copyWith(
+          caption: batchCaption.trim(),
+        );
       }
 
       await _uploadSelectedImages(scope, uploads: validUploads);
@@ -3035,7 +3611,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }) async {
     if (uploads.isEmpty) return;
 
-    final totalBytes = uploads.fold<int>(0, (acc, item) => acc + item.sizeBytes);
+    final totalBytes = uploads.fold<int>(
+      0,
+      (acc, item) => acc + item.sizeBytes,
+    );
     var uploadedBytes = 0;
     var successCount = 0;
 
@@ -3071,8 +3650,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           });
         }
 
-        final uploadBytes =
-            item.bytes.isNotEmpty ? item.bytes : await item.file.readAsBytes();
+        final uploadBytes = item.bytes.isNotEmpty
+            ? item.bytes
+            : await item.file.readAsBytes();
 
         final uploaded = await CloudinaryService.uploadBytes(
           bytes: uploadBytes,
@@ -3094,8 +3674,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     .clamp(0.0, 1.0);
 
             final now = DateTime.now();
-            final msSinceLast =
-                now.difference(_lastProgressPaintAt).inMilliseconds;
+            final msSinceLast = now
+                .difference(_lastProgressPaintAt)
+                .inMilliseconds;
             final isSignificantJump =
                 (overallProgress - _lastPaintedOverallProgress).abs() > 0.02 ||
                 (currentProgress - _lastPaintedCurrentProgress).abs() > 0.02 ||
@@ -3164,7 +3745,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         });
         _notifyShareBoxUi();
       }
-      _showMessage('Đã chia sẻ $successCount/${uploads.length} media thành công.');
+      _showMessage(
+        'Đã chia sẻ $successCount/${uploads.length} media thành công.',
+      );
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         _showMessage(
@@ -3283,10 +3866,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   // ignore: unused_element
-  Future<void> _deleteSharedMedia(
-    _FamilyScope scope,
-    _ShareImage image,
-  ) async {
+  Future<void> _deleteSharedMedia(_FamilyScope scope, _ShareImage image) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -3374,6 +3954,410 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
+  Widget _buildAdminAction() {
+    return IconButton(
+      tooltip: 'Admin',
+      onPressed: _openAdminMenuSheet,
+      icon: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.2),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+        ),
+        child: const Icon(Icons.admin_panel_settings_rounded, size: 19),
+      ),
+    );
+  }
+
+  Future<void> _openAdminMenuSheet() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => _AdminMenuSheet(
+        isDarkMode: widget.isDarkMode,
+        onToggleDarkMode: widget.onToggleDarkMode,
+      ),
+    );
+
+    if (selected == 'account') {
+      await _openAccountManagementPanel();
+      return;
+    }
+
+    if (selected == 'logout') {
+      await _signOutAndBackToLogin();
+    }
+  }
+
+  Widget _buildAccountInfoRow({
+    required String label,
+    required String value,
+    IconData? icon,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: _adaptiveTextSecondary),
+            const SizedBox(width: 6),
+          ],
+          Expanded(
+            flex: 3,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: _adaptiveTextSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            flex: 5,
+            child: Text(
+              value.isEmpty ? '(trống)' : value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: _adaptiveTextPrimary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openAccountManagementPanel() async {
+    final scope = _scope;
+    if (scope == null) {
+      _showMessage('Chưa tải được dữ liệu tài khoản. Vui lòng thử lại.');
+      return;
+    }
+
+    final usersRef = FirebaseFirestore.instance.collection('users');
+    final selfDoc = await usersRef.doc(scope.selfUid).get();
+    final linkedDoc = await usersRef.doc(scope.partnerUid).get();
+    if (!mounted) return;
+
+    final selfData = selfDoc.data() ?? <String, dynamic>{};
+    final linkedData = linkedDoc.data() ?? <String, dynamic>{};
+    final canEdit = scope.selfRole == 'child';
+
+    final selfName =
+        (selfData['name'] ?? FirebaseAuth.instance.currentUser?.displayName ?? '')
+            .toString();
+    final selfEmail =
+        (selfData['email'] ?? FirebaseAuth.instance.currentUser?.email ?? '')
+            .toString();
+    final linkedEmail = (linkedData['email'] ?? '').toString();
+    final linkedName = (linkedData['name'] ?? '').toString();
+
+    var selfPhoneValue = (selfData['phone'] ?? '').toString().trim();
+    var linkedPhoneValue = (linkedData['phone'] ?? '').toString().trim();
+
+    final selfPhoneController = TextEditingController(
+      text: selfPhoneValue,
+    );
+    final linkedPhoneController = TextEditingController(
+      text: linkedPhoneValue,
+    );
+
+    var isSaving = false;
+    var isEditingPhone = false;
+
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (pageContext) {
+            return StatefulBuilder(
+              builder: (pageContext, setPageState) {
+                Future<void> saveChanges() async {
+                  if (!canEdit || isSaving) return;
+
+                  final selfPhone = selfPhoneController.text.trim();
+                  final linkedPhone = linkedPhoneController.text.trim();
+
+                  if (selfPhone.isEmpty || linkedPhone.isEmpty) {
+                    _showMessage('Vui lòng nhập đủ số điện thoại.');
+                    return;
+                  }
+                  if (!selfPhone.startsWith('+') || !linkedPhone.startsWith('+')) {
+                    _showMessage('Nhập số điện thoại theo định dạng +84...');
+                    return;
+                  }
+
+                  setPageState(() => isSaving = true);
+                  try {
+                    // Rules only allow users to update their own profile.
+                    // Save the child's own phone first, then best-effort sync linked account.
+                    await usersRef.doc(scope.selfUid).set({
+                      'phone': selfPhone,
+                      'parentPhone': linkedPhone,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    }, SetOptions(merge: true));
+
+                    var linkedSyncBlockedByRules = false;
+                    try {
+                      await usersRef.doc(scope.partnerUid).set({
+                        'phone': linkedPhone,
+                        'childPhone': selfPhone,
+                        // Keep only the latest linked child phone to avoid
+                        // accumulating old numbers for the same account.
+                        'linkedChildPhones': [selfPhone],
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      }, SetOptions(merge: true));
+                    } on FirebaseException catch (e) {
+                      if (e.code == 'permission-denied') {
+                        linkedSyncBlockedByRules = true;
+                      } else {
+                        rethrow;
+                      }
+                    }
+
+                    selfPhoneValue = selfPhone;
+                    linkedPhoneValue = linkedPhone;
+
+                    if (pageContext.mounted) {
+                      setPageState(() {
+                        isSaving = false;
+                        isEditingPhone = false;
+                      });
+                    }
+                    if (linkedSyncBlockedByRules) {
+                      _showMessage(
+                        'Đã lưu số điện thoại tài khoản Con. Không thể đồng bộ sang tài khoản liên kết do Firestore Rules.',
+                      );
+                    } else {
+                      _showMessage('Đã lưu thông tin tài khoản.');
+                    }
+                    await _loadFamilyScope();
+                  } on FirebaseException catch (e) {
+                    _showMessage('Không thể lưu: ${e.message ?? e.code}');
+                    if (pageContext.mounted) {
+                      setPageState(() => isSaving = false);
+                    }
+                  } catch (e) {
+                    _showMessage('Không thể lưu: $e');
+                    if (pageContext.mounted) {
+                      setPageState(() => isSaving = false);
+                    }
+                  }
+                }
+
+                return Scaffold(
+                  appBar: AppBar(
+                    title: const Text('Quản lý tài khoản'),
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                  ),
+                  body: SafeArea(
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                      children: [
+                        Text(
+                          canEdit
+                              ? 'Bạn chỉ có thể chỉnh số điện thoại sau khi bấm nút Sửa số điện thoại.'
+                              : 'Tài khoản Cha/Mẹ chỉ có quyền xem thông tin.',
+                          style: TextStyle(color: Colors.grey.shade700),
+                        ),
+                        const SizedBox(height: 12),
+                        Card(
+                          margin: EdgeInsets.zero,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Tài khoản cá nhân',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 10),
+                                _buildAccountInfoRow(
+                                  label: 'Vai trò',
+                                  value: scope.selfRole == 'child' ? 'Con' : 'Cha/Mẹ',
+                                  icon: Icons.person,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Email',
+                                  value: selfEmail,
+                                  icon: Icons.alternate_email,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'UID',
+                                  value: scope.selfUid,
+                                  icon: Icons.fingerprint,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Họ và tên',
+                                  value: selfName,
+                                  icon: Icons.badge_outlined,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Số điện thoại',
+                                  value: selfPhoneValue,
+                                  icon: Icons.phone_android,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Card(
+                          margin: EdgeInsets.zero,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Tài khoản liên kết',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 10),
+                                _buildAccountInfoRow(
+                                  label: 'Vai trò',
+                                  value: scope.partnerRole == 'child' ? 'Con' : 'Cha/Mẹ',
+                                  icon: Icons.link,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Email',
+                                  value: linkedEmail,
+                                  icon: Icons.alternate_email,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'UID',
+                                  value: scope.partnerUid,
+                                  icon: Icons.fingerprint,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Họ và tên',
+                                  value: linkedName,
+                                  icon: Icons.badge_outlined,
+                                ),
+                                _buildAccountInfoRow(
+                                  label: 'Số điện thoại',
+                                  value: linkedPhoneValue,
+                                  icon: Icons.phone,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (canEdit) ...[
+                          const SizedBox(height: 12),
+                          Card(
+                            margin: EdgeInsets.zero,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Text(
+                                        'Cập nhật số điện thoại',
+                                        style: TextStyle(fontWeight: FontWeight.w700),
+                                      ),
+                                      const Spacer(),
+                                      if (!isEditingPhone)
+                                        OutlinedButton.icon(
+                                          onPressed: isSaving
+                                              ? null
+                                              : () {
+                                                  setPageState(() {
+                                                    isEditingPhone = true;
+                                                    selfPhoneController.text =
+                                                        selfPhoneValue;
+                                                    linkedPhoneController.text =
+                                                        linkedPhoneValue;
+                                                  });
+                                                },
+                                          icon: const Icon(Icons.edit_outlined),
+                                          label: const Text('Sửa số điện thoại'),
+                                        ),
+                                    ],
+                                  ),
+                                  if (isEditingPhone) ...[
+                                    const SizedBox(height: 10),
+                                    TextField(
+                                      controller: selfPhoneController,
+                                      enabled: !isSaving,
+                                      keyboardType: TextInputType.phone,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Số điện thoại tài khoản Con',
+                                        hintText: '+84...',
+                                        border: OutlineInputBorder(),
+                                        isDense: true,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextField(
+                                      controller: linkedPhoneController,
+                                      enabled: !isSaving,
+                                      keyboardType: TextInputType.phone,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Số điện thoại tài khoản liên kết',
+                                        hintText: '+84...',
+                                        border: OutlineInputBorder(),
+                                        isDense: true,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        TextButton(
+                                          onPressed: isSaving
+                                              ? null
+                                              : () {
+                                                  setPageState(() {
+                                                    isEditingPhone = false;
+                                                  });
+                                                },
+                                          child: const Text('Hủy'),
+                                        ),
+                                        const Spacer(),
+                                        ElevatedButton.icon(
+                                          onPressed: isSaving ? null : saveChanges,
+                                          icon: isSaving
+                                              ? const SizedBox(
+                                                  width: 16,
+                                                  height: 16,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                  ),
+                                                )
+                                              : const Icon(Icons.save_outlined),
+                                          label: Text(
+                                            isSaving ? 'Đang lưu...' : 'Lưu thay đổi',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      );
+    } finally {
+      selfPhoneController.dispose();
+      linkedPhoneController.dispose();
+    }
+  }
+
   Future<void> _signOutAndBackToLogin({bool requireConfirm = true}) async {
     if (requireConfirm && mounted) {
       final confirmed = await showDialog<bool>(
@@ -3420,6 +4404,21 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Future<void> _openNotificationsPanel() async {
     final scope = _scope;
+    if (scope != null) {
+      final snapshot = await _taskCollection(scope).get();
+      final openedUnreadIds = _buildTaskNotifications(snapshot.docs)
+          .where((item) => item.isUnread)
+          .map((item) => item.id)
+          .toSet();
+
+      if (!mounted) return;
+      setState(() {
+        _notificationPanelSessionActive = true;
+        _notificationPanelOpenedUnreadIds = openedUnreadIds;
+        _notificationPanelTouchedIds = <String>{};
+      });
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -3438,102 +4437,46 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   ),
                   const SizedBox(height: 10),
                   Expanded(
-                    child: widget.isChildView && scope != null
-                        ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _taskCollection(scope).snapshots(),
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState ==
-                                  ConnectionState.waiting) {
-                                return const Center(
-                                  child: CircularProgressIndicator(),
-                                );
-                              }
+                    child: scope == null
+                        ? const Center(child: Text('Chưa có thông báo mới.'))
+                        : ValueListenableBuilder<int>(
+                            valueListenable: _notificationStatusChanged,
+                            builder: (context, value, child) {
+                              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                                stream: _taskCollection(scope).snapshots(),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return const Center(
+                                      child: CircularProgressIndicator(),
+                                    );
+                                  }
 
-                              final docs = snapshot.data?.docs ?? const [];
-                              final activities = <Map<String, dynamic>>[];
-                              final now = DateTime.now();
-                              for (final doc in docs) {
-                                final data = doc.data();
-                                final checkedAt = data['checkedAt'];
-                                final checkedByRole = (data['checkedByRole'] ?? '')
-                                    .toString();
-                                final completed = data['completed'] == true;
-                                final title =
-                                    (data['title'] ?? 'Công việc').toString();
+                                  final docs = snapshot.data?.docs ?? const [];
+                                  final notifications = _buildTaskNotifications(
+                                    docs,
+                                  );
 
-                                if (completed &&
-                                    checkedByRole == 'parent' &&
-                                    checkedAt is Timestamp) {
-                                  activities.add({
-                                    'type': 'completed',
-                                    'title': title,
-                                    'eventAt': checkedAt.toDate(),
-                                  });
-                                  continue;
-                                }
+                                  if (notifications.isEmpty) {
+                                    return const Center(
+                                      child: Text(
+                                        'Chưa có hoạt động mới từ Cha/Mẹ.',
+                                      ),
+                                    );
+                                  }
 
-                                final scheduledAt = data['scheduledAt'];
-                                if (!completed &&
-                                    scheduledAt is Timestamp &&
-                                    scheduledAt.toDate().isBefore(now)) {
-                                  activities.add({
-                                    'type': 'overdue',
-                                    'title': title,
-                                    'eventAt': scheduledAt.toDate(),
-                                  });
-                                }
-                              }
-
-                              activities.sort(
-                                (a, b) => (b['eventAt'] as DateTime)
-                                .compareTo(a['eventAt'] as DateTime),
-                              );
-
-                              if (activities.isEmpty) {
-                                return const Center(
-                                  child: Text('Chưa có hoạt động mới từ Cha/Mẹ.'),
-                                );
-                              }
-
-                              return ListView.separated(
-                                itemCount: activities.length,
-                                separatorBuilder: (_, _) =>
-                                    const SizedBox(height: 8),
-                                itemBuilder: (context, index) {
-                                  final item = activities[index];
-                                  final type = item['type'] as String;
-                                  final at = item['eventAt'] as DateTime;
-                                  final title = item['title'] as String;
-                                  final relative = _formatRelativeTime(at);
-                                  final exact = _formatExactDateTime(at);
-                                  final isCompleted = type == 'completed';
-
-                                  final headline = isCompleted
-                                      ? 'Cha/Mẹ đã hoàn thành "$title"'
-                                      : 'Cha/Mẹ chưa hoàn thành "$title" (đã quá hạn)';
-
-                                  return ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                    ),
-                                    leading: Icon(
-                                      isCompleted
-                                          ? Icons.notifications_active
-                                          : Icons.warning_amber_rounded,
-                                      color: isCompleted
-                                          ? Colors.blueAccent
-                                          : Colors.orange,
-                                    ),
-                                    title: Text(headline),
-                                    subtitle: Text('$relative\n$exact'),
-                                    isThreeLine: true,
+                                  return ListView.separated(
+                                    itemCount: notifications.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: 8),
+                                    itemBuilder: (context, index) {
+                                      final item = notifications[index];
+                                      return _buildNotificationTile(scope, item);
+                                    },
                                   );
                                 },
                               );
                             },
-                          )
-                        : const Center(
-                            child: Text('Chưa có thông báo mới.'),
                           ),
                   ),
                 ],
@@ -3543,6 +4486,25 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         );
       },
     );
+
+    if (scope != null && mounted) {
+      final idsToMarkRead = _notificationPanelOpenedUnreadIds
+          .difference(_notificationPanelTouchedIds);
+      if (idsToMarkRead.isNotEmpty) {
+        setState(() {
+          _readNotificationIds.addAll(idsToMarkRead);
+        });
+        await _saveNotificationStates(scope);
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _notificationPanelSessionActive = false;
+        _notificationPanelOpenedUnreadIds = <String>{};
+        _notificationPanelTouchedIds = <String>{};
+      });
+    }
   }
 
   String _formatExactDateTime(DateTime dateTime) {
@@ -3616,21 +4578,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       appBar: AppBar(
         title: Text(
           widget.isChildView
-              ? 'Trang Chủ Tài Khoản Con'
-              : 'Trang Chủ Tài Khoản Cha/Mẹ',
+              ? 'Tài Khoản Con'
+              : 'Tài Khoản Cha Mẹ',
         ),
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: Theme.of(context).colorScheme.primary,
         actions: [
-          IconButton(
-            tooltip: 'Thông báo',
-            onPressed: _openNotificationsPanel,
-            icon: const Icon(Icons.notifications_none),
-          ),
-          IconButton(
-            tooltip: 'Đăng xuất',
-            onPressed: () => _signOutAndBackToLogin(),
-            icon: const Icon(Icons.logout),
-          ),
+          if (widget.isChildView) _buildNotificationAction(),
+          _buildAdminAction(),
         ],
       ),
       body: _loadingScope
@@ -3666,8 +4620,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             ? _buildTopActionRow(scope)
             : _buildParentQuickActionRow(scope),
         const SizedBox(height: 12),
-        _buildDashboardCard(scope),
-        const SizedBox(height: 12),
         _buildTaskManagerCard(scope),
       ],
     );
@@ -3682,7 +4634,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Vị trí hiện tại', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            const Text(
+              'Vị trí hiện tại',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
             const SizedBox(height: 12),
             if (_currentPosition != null)
               Column(
@@ -3699,11 +4654,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Địa chỉ chi tiết:', style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Địa chỉ chi tiết:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                         const SizedBox(height: 6),
                         Text(
-                          _currentAddress ?? '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.5),
+                          _currentAddress ??
+                              '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            height: 1.5,
+                          ),
                         ),
                       ],
                     ),
@@ -3718,7 +4685,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             else
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: SizedBox(height: 40, width: 40, child: CircularProgressIndicator())),
+                child: Center(
+                  child: SizedBox(
+                    height: 40,
+                    width: 40,
+                    child: CircularProgressIndicator(),
+                  ),
+                ),
               ),
           ],
         ),
@@ -3738,7 +4711,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               Expanded(
                 child: SizedBox.expand(
                   child: FilledButton.icon(
-                    onPressed: _showEmergencyCallConfirm,
+                    onPressed: () => _triggerEmergencySos(scope),
                     icon: const Icon(Icons.sos),
                     label: const Text(
                       'Cuộc gọi\nkhẩn cấp',
@@ -3768,13 +4741,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 child: SizedBox.expand(
                   child: FilledButton.icon(
                     onPressed: () => _openShareBoxBottomSheet(scope),
-                    icon: const Icon(Icons.chat_bubble_outline),
-                    label: const Text(
-                      'Chat',
-                      textAlign: TextAlign.center,
-                    ),
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('ShareBox', textAlign: TextAlign.center),
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
+                      backgroundColor: Theme.of(context).colorScheme.primary,
                       foregroundColor: Colors.white,
                       iconSize: 26,
                       padding: const EdgeInsets.symmetric(
@@ -3799,33 +4769,79 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Future<void> _showEmergencyCallConfirm() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Gọi khẩn cấp'),
-        content: const Text('Bạn có muốn thực hiện cuộc gọi khẩn cấp 115 không?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Gọi 115'),
-          ),
-        ],
-      ),
-    );
+  Future<String> _resolveLinkedChildPhone(_FamilyScope scope) async {
+    try {
+      final childDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(scope.partnerUid)
+          .get();
+      final childPhone = (childDoc.data()?['phone'] ?? '').toString().trim();
+      if (childPhone.isNotEmpty) {
+        return EmergencyContactService.normalizePhone(childPhone);
+      }
 
-    if (confirmed == true) {
-      _showMessage('Vui lòng gọi 115 để liên hệ cấp cứu khẩn cấp.');
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return '';
+
+      final parentDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+      final parentData = parentDoc.data() ?? {};
+
+      var fallbackPhone = (parentData['childPhone'] ?? '').toString().trim();
+      if (fallbackPhone.isEmpty) {
+        final linkedChildPhones = parentData['linkedChildPhones'];
+        if (linkedChildPhones is List && linkedChildPhones.isNotEmpty) {
+          fallbackPhone = linkedChildPhones.first.toString().trim();
+        }
+      }
+
+      return EmergencyContactService.normalizePhone(fallbackPhone);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _triggerEmergencySos(_FamilyScope scope) async {
+    final childPhone = await _resolveLinkedChildPhone(scope);
+    if (!mounted) return;
+
+    if (childPhone.isEmpty) {
+      _showMessage(
+        'Chưa có số điện thoại của tài khoản Con. Vui lòng liên kết lại để dùng SOS.',
+      );
+      return;
+    }
+
+    final smsBody =
+        'SOS! Cha/Mẹ dang can lien lac khan cap. Vui long goi lai ngay.';
+    final action = await EmergencyContactService.startSosToChild(
+      phone: childPhone,
+      smsBody: smsBody,
+    );
+    if (!mounted) return;
+
+    switch (action) {
+      case EmergencyActionResult.callStarted:
+        _showMessage('Đang gọi SOS trực tiếp tới $childPhone.');
+        break;
+      case EmergencyActionResult.smsOpened:
+        _showMessage(
+          'Không gọi trực tiếp được, đã chuyển sang SMS tới $childPhone.',
+        );
+        break;
+      case EmergencyActionResult.failed:
+        _showMessage(
+          'Không thể mở cuộc gọi/SMS SOS. Vui lòng kiểm tra quyền gọi điện.',
+        );
+        break;
     }
   }
 
   Widget _buildTopActionRow(_FamilyScope scope) {
     final canAddTasks = scope.selfRole == 'child';
+    final canViewStats = scope.selfRole == 'child';
     const actionButtonSize = 56.0;
     const actionGap = 10.0;
     return Card(
@@ -3840,10 +4856,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               width: actionButtonSize,
               child: Column(
                 children: [
+                  _buildShareBoxActionButton(scope, actionButtonSize),
+                  const SizedBox(height: actionGap),
                   _buildSideActionButton(
-                    icon: Icons.chat_bubble_outline,
-                    tooltip: 'Mở Chat',
-                    onTap: () => _openShareBoxBottomSheet(scope),
+                    icon: Icons.query_stats_rounded,
+                    tooltip: canViewStats
+                        ? 'Mở trang thống kê công việc'
+                        : 'Chỉ tài khoản Con được xem thống kê',
+                    onTap: canViewStats
+                        ? () => _openTaskStatisticsPage(scope)
+                        : null,
                     size: actionButtonSize,
                   ),
                   const SizedBox(height: actionGap),
@@ -3866,11 +4888,35 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
+  Future<void> _openTaskStatisticsPage(_FamilyScope scope) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Thống kê công việc'),
+              backgroundColor: Theme.of(context).colorScheme.primary,
+            ),
+            body: SafeArea(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _buildDashboardCard(scope),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildSideActionButton({
     required IconData icon,
     required String tooltip,
     required VoidCallback? onTap,
     required double size,
+    int badgeCount = 0,
   }) {
     return Tooltip(
       message: tooltip,
@@ -3878,7 +4924,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         width: size,
         height: size,
         child: Material(
-          color: onTap == null ? Colors.grey.shade100 : Colors.blue.shade50,
+            color: onTap == null
+              ? Colors.grey.shade100
+              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.09),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: BorderSide(color: Colors.blueGrey.shade100),
@@ -3886,12 +4934,42 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: onTap,
-            child: Center(
-              child: Icon(
-                icon,
-                size: 26,
-                color: onTap == null ? Colors.grey : Colors.blueAccent,
-              ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Center(
+                  child: Icon(
+                    icon,
+                    size: 26,
+                    color: onTap == null
+                        ? Colors.grey
+                        : Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: 3,
+                    top: 3,
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        badgeCount > 99 ? '99+' : '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -3899,27 +4977,113 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
+  Widget _buildShareBoxActionButton(_FamilyScope scope, double size) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _shareStream(scope),
+      builder: (context, mediaSnapshot) {
+        final mediaDocs = mediaSnapshot.data?.docs ?? const [];
+        final unreadMediaCount = _countUnreadShareBoxItems(
+          mediaDocs,
+          scope.selfUid,
+          _shareboxLastSeenMillis,
+        );
+
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _chatStream(scope),
+          builder: (context, chatSnapshot) {
+            final chatDocs = chatSnapshot.data?.docs ?? const [];
+            final unreadChatCount = _countUnreadShareBoxItems(
+              chatDocs,
+              scope.selfUid,
+              _shareboxLastSeenMillis,
+            );
+
+            final unreadCount = unreadMediaCount + unreadChatCount;
+
+            return _buildSideActionButton(
+              icon: Icons.photo_library,
+              tooltip: 'Mở ShareBox',
+              onTap: () => _openShareBoxBottomSheet(scope),
+              size: size,
+              badgeCount: unreadCount,
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _openShareBoxBottomSheet(_FamilyScope scope) async {
-    _chatLoadLimit = 30;
-    _shareLoadLimit = 30;
+    final unreadCutoffMillis = _shareboxLastSeenMillis;
+    _forceScrollShareBoxUnreadOnNextBuild = true;
+    _forceScrollShareBoxLatestOnNextBuild = false;
     _lastTimelineItemCount = 0;
     _lastTimelineTailKey = null;
+    await _markShareBoxAsSeen(scope);
+    if (!mounted) return;
+
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) {
-          return Scaffold(
-            appBar: AppBar(
-              title: const Text('Chat'),
-              backgroundColor: Colors.blueAccent,
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            title: const Text('ShareBox'),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+          body: SafeArea(
+            child: _buildChatPage(
+              scope,
+              unreadCutoffMillis: unreadCutoffMillis,
             ),
-            body: SafeArea(child: _buildChatPage(scope)),
-          );
-        },
+          ),
+        ),
+      ),
+    );
+
+    await _markShareBoxAsSeen(scope);
+  }
+
+  Future<void> _scrollToShareBoxUnreadDivider() async {
+    final dividerContext = _shareboxUnreadDividerKey.currentContext;
+    if (dividerContext != null) {
+      await Scrollable.ensureVisible(
+        dividerContext,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOut,
+        alignment: 0.15,
+      );
+      return;
+    }
+
+    if (_chatTimelineScrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _scrollToShareBoxUnreadDivider();
+        }
+      });
+    }
+  }
+
+  Widget _buildUnreadTimelineDivider() {
+    return Padding(
+      key: _shareboxUnreadDividerKey,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Center(
+        child: Text(
+          '---Tin nhắn mới---',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade500,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildChatPage(_FamilyScope scope) {
+  Widget _buildChatPage(
+    _FamilyScope scope, {
+    int unreadCutoffMillis = 0,
+  }) {
     return Column(
       children: [
         Expanded(
@@ -3970,7 +5134,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       );
                     }
 
-                    final chatEntries = chatSnapshot.data?.docs
+                    final chatEntries =
+                        chatSnapshot.data?.docs
                             .where(
                               (doc) =>
                                   !_isDeletedForUser(doc.data(), scope.selfUid),
@@ -3984,164 +5149,241 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       ...chatEntries.map(_ShareTimelineItem.chat),
                     ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
+                    final firstUnreadIndex = timelineItems.indexWhere(
+                      (item) =>
+                          _isUnreadShareBoxTimelineItem(
+                            item,
+                            scope.selfUid,
+                            unreadCutoffMillis,
+                          ),
+                    );
+
                     final tailKey = timelineItems.isEmpty
                         ? null
                         : '${timelineItems.last.createdAt.millisecondsSinceEpoch}_${timelineItems.last.senderUid}_${timelineItems.length}';
                     final hasNewTimelineItem =
                         _lastTimelineItemCount != timelineItems.length ||
                         _lastTimelineTailKey != tailKey;
-                    if (hasNewTimelineItem && !_loadingOlderChats) {
+                    var handledInitialJump = false;
+                    if (_forceScrollShareBoxUnreadOnNextBuild &&
+                        timelineItems.isNotEmpty &&
+                        !_loadingOlderChats) {
+                      _forceScrollShareBoxUnreadOnNextBuild = false;
+                      handledInitialJump = true;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (firstUnreadIndex >= 0) {
+                          _scrollToShareBoxUnreadDivider();
+                        } else {
+                          _autoScrollChatToLatest(force: true);
+                        }
+                      });
+                    }
+                    if (_forceScrollShareBoxLatestOnNextBuild &&
+                        timelineItems.isNotEmpty &&
+                        !_loadingOlderChats) {
+                      _forceScrollShareBoxLatestOnNextBuild = false;
+                      handledInitialJump = true;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _autoScrollChatToLatest(force: true);
+                      });
+                    }
+                    if (hasNewTimelineItem &&
+                        !_loadingOlderChats &&
+                        !handledInitialJump) {
                       _lastTimelineItemCount = timelineItems.length;
                       _lastTimelineTailKey = tailKey;
                       _autoScrollChatToLatest();
                     }
 
                     if (timelineItems.isEmpty) {
-                      return const Center(child: Text('Chưa có nội dung chat.'));
+                      return const Center(
+                        child: Text('Chưa có nội dung chat.'),
+                      );
                     }
 
-                    return RefreshIndicator(
-                      onRefresh: _loadOlderMessages,
-                      child: ListView.separated(
-                        controller: _chatTimelineScrollController,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.only(bottom: 10),
-                        itemCount: timelineItems.length + 1,
-                        separatorBuilder: (context, index) =>
-                          const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          if (index == 0) {
-                            return Center(
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
-                                ),
-                                child: Text(
-                                  _loadingOlderChats
-                                      ? 'Đang tải thêm tin nhắn...'
-                                      : 'Kéo xuống để tải thêm tin nhắn cũ',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.black54,
+                    return Stack(
+                      children: [
+                        RefreshIndicator(
+                          onRefresh: _loadOlderMessages,
+                          child: ListView.separated(
+                            controller: _chatTimelineScrollController,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(bottom: 10),
+                            itemCount: timelineItems.length + 1,
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              if (index == 0) {
+                                return Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
+                                    child: Text(
+                                      _loadingOlderChats
+                                          ? 'Đang tải thêm tin nhắn...'
+                                          : 'Kéo xuống để tải thêm tin nhắn cũ',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                            );
-                          }
+                                );
+                              }
 
-                          final item = timelineItems[index - 1];
-                            final isMine = item.senderUid == scope.selfUid;
-                            final sideLabel = item.senderRole == 'parent'
-                              ? 'Cha/Mẹ'
-                              : 'Con';
-                            final alignment = isMine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft;
-                            final bubbleColor = isMine
-                              ? Colors.blue.shade50
-                              : Colors.grey.shade100;
-                            final borderColor = isMine
-                              ? Colors.blue.shade200
-                              : Colors.blueGrey.shade200;
-                          final bubble = ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 250),
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: bubbleColor,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: borderColor),
-                              ),
-                              child: item.isChat
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          item.chat!.text,
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          '$sideLabel • ${_formatDateTime(item.createdAt)}',
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.black54,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : GestureDetector(
-                                      onTap: () =>
-                                          _openImagePreview(item.media!),
-                                      child: item.media!.isVideo
-                                          ? Container(
-                                              height: 120,
-                                              width: 170,
-                                              decoration: BoxDecoration(
-                                                color: Colors.black12,
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                              ),
-                                              child: const Center(
-                                                child: Icon(
-                                                  Icons.videocam,
-                                                  size: 32,
-                                                ),
-                                              ),
-                                            )
-                                          : ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                              child: Image.network(
-                                                item.media!.imageUrl,
-                                                height: 130,
-                                                width: 170,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (_, _, _) =>
-                                                    const SizedBox(
-                                                  height: 120,
-                                                  width: 170,
-                                                  child: Center(
-                                                    child: Icon(
-                                                      Icons.broken_image,
-                                                    ),
-                                                  ),
-                                                ),
+                              final timelineIndex = index - 1;
+                              final item = timelineItems[timelineIndex];
+                              final showUnreadDivider =
+                                  firstUnreadIndex >= 0 &&
+                                  timelineIndex == firstUnreadIndex;
+                              final isMine = item.senderUid == scope.selfUid;
+                              final sideLabel = item.senderRole == 'parent'
+                                  ? 'Cha/Mẹ'
+                                  : 'Con';
+                              final alignment = isMine
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft;
+                              final bubbleColor = isMine
+                                  ? Colors.blue.shade50
+                                  : Colors.grey.shade100;
+                              final borderColor = isMine
+                                  ? Colors.blue.shade200
+                                  : Colors.blueGrey.shade200;
+                              final bubble = ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 250),
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: bubbleColor,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: borderColor),
+                                  ),
+                                  child: item.isChat
+                                      ? Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              item.chat!.text,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.black87,
                                               ),
                                             ),
-                                    ),
-                            ),
-                          );
-
-                          return Align(
-                            alignment: alignment,
-                            child: isMine
-                                ? Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Tùy chọn',
-                                        icon: const Icon(
-                                          Icons.more_horiz,
-                                          size: 20,
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.black54,
+                                              ),
+                                            ),
+                                          ],
+                                        )
+                                      : GestureDetector(
+                                          onTap: () =>
+                                              _openImagePreview(item.media!),
+                                          child: item.media!.isVideo
+                                              ? Container(
+                                                  height: 120,
+                                                  width: 170,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.black12,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                  ),
+                                                  child: const Center(
+                                                    child: Icon(
+                                                      Icons.videocam,
+                                                      size: 32,
+                                                    ),
+                                                  ),
+                                                )
+                                              : ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  child: Image.network(
+                                                    item.media!.imageUrl,
+                                                    height: 130,
+                                                    width: 170,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, _, _) =>
+                                                        const SizedBox(
+                                                          height: 120,
+                                                          width: 170,
+                                                          child: Center(
+                                                            child: Icon(
+                                                              Icons.broken_image,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ),
                                         ),
-                                        onPressed: () =>
-                                            _showMyMessageActions(scope, item),
-                                      ),
-                                      bubble,
-                                    ],
-                                  )
-                                : bubble,
-                          );
-                        },
-                      ),
+                                ),
+                              );
+
+                              final messageWidget = Align(
+                                alignment: alignment,
+                                child: isMine
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.end,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          IconButton(
+                                            tooltip: 'Tùy chọn',
+                                            icon: const Icon(
+                                              Icons.more_horiz,
+                                              size: 20,
+                                            ),
+                                            onPressed: () =>
+                                                _showMyMessageActions(
+                                                  scope,
+                                                  item,
+                                                ),
+                                          ),
+                                          bubble,
+                                        ],
+                                      )
+                                    : bubble,
+                              );
+
+                              if (!showUnreadDivider) {
+                                return messageWidget;
+                              }
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildUnreadTimelineDivider(),
+                                  const SizedBox(height: 6),
+                                  messageWidget,
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                        Positioned(
+                          right: 8,
+                          bottom: 14,
+                          child: FloatingActionButton.small(
+                            heroTag: 'chat_jump_latest',
+                            onPressed: () => _autoScrollChatToLatest(
+                              force: true,
+                            ),
+                            backgroundColor:
+                                Colors.black.withValues(alpha: 0.45),
+                            foregroundColor: Colors.white,
+                            child: const Icon(Icons.keyboard_arrow_down),
+                          ),
+                        ),
+                      ],
                     );
                   },
                 );
@@ -4153,9 +5395,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
           decoration: BoxDecoration(
             color: Colors.white,
-            border: Border(
-              top: BorderSide(color: Colors.blueGrey.shade100),
-            ),
+            border: Border(top: BorderSide(color: Colors.blueGrey.shade100)),
           ),
           child: SafeArea(
             top: false,
@@ -4242,17 +5482,20 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                                 (e) => Container(
                                                   padding:
                                                       const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 4,
-                                                  ),
+                                                        horizontal: 8,
+                                                        vertical: 4,
+                                                      ),
                                                   decoration: BoxDecoration(
                                                     color:
                                                         Colors.blueGrey.shade50,
                                                     borderRadius:
-                                                        BorderRadius.circular(12),
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
                                                     border: Border.all(
                                                       color: Colors
-                                                          .blueGrey.shade100,
+                                                          .blueGrey
+                                                          .shade100,
                                                     ),
                                                   ),
                                                   child: Text(
@@ -4274,7 +5517,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           ),
                           Container(
                             decoration: BoxDecoration(
-                              color: Colors.blueAccent,
+                              color: Theme.of(context).colorScheme.primary,
                               borderRadius: BorderRadius.circular(20),
                             ),
                             margin: const EdgeInsets.only(left: 6),
@@ -4324,10 +5567,24 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             ? _formatDateTime(updatedAt.toDate())
             : 'Chưa cập nhật';
 
-        final hasLocation = lat != null && lng != null;
+        final double? latNum = lat is num ? lat.toDouble() : null;
+        final double? lngNum = lng is num ? lng.toDouble() : null;
+
+        final hasLocation = latNum != null && lngNum != null;
         final mapsUrl = hasLocation
-            ? 'https://www.google.com/maps/search/?api=1&query=$lat,$lng'
+            ? 'https://www.google.com/maps/search/?api=1&query=$latNum,$lngNum'
             : '';
+        final directionsUrl = hasLocation
+            ? 'https://www.google.com/maps/dir/?api=1&destination=$latNum,$lngNum&travelmode=driving'
+            : '';
+
+        final actionUrl = widget.isChildView ? directionsUrl : mapsUrl;
+        final actionLabel = widget.isChildView
+            ? 'Điều hướng'
+            : 'Mở Google Maps';
+        final actionIcon = widget.isChildView
+            ? Icons.directions
+            : Icons.location_on;
 
         final tile = Padding(
           padding: const EdgeInsets.all(10),
@@ -4360,12 +5617,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 Text(
                   (address?.toString().trim().isNotEmpty ?? false)
                       ? address.toString()
-                      : '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                      : '${latNum.toStringAsFixed(6)}, ${lngNum.toStringAsFixed(6)}',
                   style: const TextStyle(fontSize: 13.5, height: 1.4),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Tọa độ: ${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                  'Tọa độ: ${latNum.toStringAsFixed(6)}, ${lngNum.toStringAsFixed(6)}',
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const SizedBox(height: 6),
@@ -4376,14 +5633,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: () async {
-                    if (!await canLaunchUrl(Uri.parse(mapsUrl))) return;
+                    if (!await canLaunchUrl(Uri.parse(actionUrl))) return;
                     await launchUrl(
-                      Uri.parse(mapsUrl),
+                      Uri.parse(actionUrl),
                       mode: LaunchMode.externalApplication,
                     );
                   },
-                  icon: const Icon(Icons.location_on),
-                  label: const Text('Mở Google Maps'),
+                  icon: Icon(actionIcon),
+                  label: Text(actionLabel),
                 ),
               ] else
                 const Text('Chưa có vị trí realtime'),
@@ -4401,10 +5658,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           );
         }
 
-        return Card(
-          margin: EdgeInsets.zero,
-          child: tile,
-        );
+        return Card(margin: EdgeInsets.zero, child: tile);
       },
     );
   }
@@ -4436,16 +5690,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Thống kê công việc',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                const Row(
+                  children: [
+                    Icon(Icons.analytics_outlined, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Thống kê công việc',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
                     Expanded(
                       child: SizedBox(
-                        height: 112,
+                        height: 72,
                         child: _buildStatTile(
                           label: 'Chưa hoàn thành',
                           value: pendingCount,
@@ -4456,7 +5716,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: SizedBox(
-                        height: 112,
+                        height: 72,
                         child: _buildStatTile(
                           label: 'Đã hết hạn',
                           value: overdueCount,
@@ -4467,7 +5727,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: SizedBox(
-                        height: 112,
+                        height: 72,
                         child: _buildStatTile(
                           label: 'Đã hoàn thành',
                           value: completedCount,
@@ -4477,6 +5737,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 14),
+                _buildWeeklyTaskDistributionSection(tasks: tasks),
               ],
             ),
           ),
@@ -4490,44 +5752,555 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     required int value,
     required Color color,
   }) {
+    final quantityText = 'Số lượng: ${value.toString().padLeft(2, '0')}';
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        color: color.withValues(alpha: 0.11),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.32)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.09),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                quantityText,
+                maxLines: 1,
+                softWrap: false,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeeklyTaskDistributionSection({
+    required List<_TaskItem> tasks,
+  }) {
+    final today = DateTime.now();
+    final weekStart = _startOfWeekMonday(today)
+        .add(Duration(days: _distributionWeekOffset * 7));
+    final weekEnd = weekStart.add(const Duration(days: 7));
+    final weekTasks = tasks.where((task) {
+      final createdAt = task.createdAt;
+      return !createdAt.isBefore(weekStart) && createdAt.isBefore(weekEnd);
+    }).toList();
+
+    final dailyBuckets = List.generate(
+      7,
+      (_) => <int>[0, 0, 0],
+    );
+    final dailyTasks = List.generate(7, (_) => <_TaskItem>[]);
+
+    for (final task in weekTasks) {
+      final dayIndex = task.createdAt.difference(weekStart).inDays;
+      if (dayIndex < 0 || dayIndex > 6) continue;
+
+      dailyTasks[dayIndex].add(task);
+
+      final statusIndex = task.completed
+          ? 2
+          : (_isTaskOverdue(task, today) ? 1 : 0);
+      dailyBuckets[dayIndex][statusIndex]++;
+    }
+
+    final maxDailyTotal = dailyBuckets.fold<int>(
+      0,
+      (currentMax, bucket) => math.max(
+        currentMax,
+        bucket[0] + bucket[1] + bucket[2],
+      ),
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.blueGrey.shade100),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 44,
-            child: Align(
-              alignment: Alignment.topLeft,
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(
+            children: [
+              Icon(
+                Icons.bar_chart_rounded,
+                size: 18,
+                color: Colors.blueGrey.shade700,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Biểu đồ phân bố số lượng công việc theo ngày',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Row(
+          children: [
+            IconButton(
+              tooltip: 'Tuần trước',
+              onPressed: () => setState(() => _distributionWeekOffset--),
+              icon: const Icon(Icons.chevron_left),
+            ),
+            Expanded(
+              child: Center(
+                child: Text(
+                  '${_formatDayMonth(weekStart)} - ${_formatDayMonth(weekStart.add(const Duration(days: 6)))}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _adaptiveTextSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Tuần sau',
+              onPressed: () => setState(() => _distributionWeekOffset++),
+              icon: const Icon(Icons.chevron_right),
+            ),
+          ],
+        ),
+          const SizedBox(height: 12),
+          if (weekTasks.isEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(
+                  'Không có công việc nào trong tuần này.',
+                  style: TextStyle(color: _adaptiveTextSecondary),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 300,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: List.generate(7, (index) {
+                  final day = weekStart.add(Duration(days: index));
+                  final pending = dailyBuckets[index][0];
+                  final overdue = dailyBuckets[index][1];
+                  final completed = dailyBuckets[index][2];
+                  final total = pending + overdue + completed;
+                  final barHeight = total == 0
+                      ? 22.0
+                      : 26.0 + (140.0 * total / maxDailyTotal);
+                  final barTasks = dailyTasks[index];
+
+                  return Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: total == 0
+                                ? null
+                                : () => _showTaskDistributionDetails(
+                                      day: day,
+                                      tasks: barTasks,
+                                    ),
+                            child: SizedBox(
+                              height: barHeight,
+                              width: double.infinity,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.zero,
+                                  border: Border.all(
+                                    color: Colors.blueGrey.shade100,
+                                    width: 1,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.04),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRect(
+                                  child: total == 0
+                                      ? Center(
+                                          child: Text(
+                                            _shortDayLabel(day),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.black38,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        )
+                                      : Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            if (completed > 0)
+                                              Expanded(
+                                                flex: completed,
+                                                child: _buildTaskChartSegment(
+                                                  color: Colors.green.shade400,
+                                                ),
+                                              ),
+                                            if (overdue > 0)
+                                              Expanded(
+                                                flex: overdue,
+                                                child: _buildTaskChartSegment(
+                                                  color: Colors.red.shade400,
+                                                ),
+                                              ),
+                                            if (pending > 0)
+                                              Expanded(
+                                                flex: pending,
+                                                child: _buildTaskChartSegment(
+                                                  color: Colors.orange.shade400,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _shortDayLabel(day),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _formatDayMonth(day),
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: _adaptiveTextSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _buildChartLegendChip('Chưa hoàn thành', Colors.orange.shade400),
+              const SizedBox(width: 8),
+              _buildChartLegendChip('Đã hết hạn', Colors.red.shade400),
+              const SizedBox(width: 8),
+              _buildChartLegendChip('Đã hoàn thành', Colors.green.shade400),
+            ],
+          ),
+          if (maxDailyTotal > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Cột thể hiện số công việc được giao trong ngày, phần màu chồng lên nhau thể hiện trạng thái hiện tại.',
+              style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade600),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChartLegendChip(String label, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.22),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
               child: Text(
                 label,
-                maxLines: 2,
+                textAlign: TextAlign.center,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  height: 1.2,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTaskChartSegment({
+    required Color color,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.zero,
+      ),
+    );
+  }
+
+  Future<void> _showTaskDistributionDetails({
+    required DateTime day,
+    required List<_TaskItem> tasks,
+  }) async {
+    final pendingTasks = tasks
+        .where((task) => !task.completed && !_isTaskOverdue(task, DateTime.now()))
+        .toList();
+    final overdueTasks = tasks
+        .where((task) => !task.completed && _isTaskOverdue(task, DateTime.now()))
+        .toList();
+    final completedTasks = tasks.where((task) => task.completed).toList();
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(sheetContext).size.height * 0.72,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.calendar_month_outlined),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${_shortDayLabel(day)} • ${_formatDayMonth(day)}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '${tasks.length} công việc',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.blueGrey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          _buildChartLegendChip(
+                            'Chưa hoàn thành',
+                            Colors.orange.shade400,
+                          ),
+                          const SizedBox(width: 8),
+                          _buildChartLegendChip(
+                            'Đã hết hạn',
+                            Colors.red.shade400,
+                          ),
+                          const SizedBox(width: 8),
+                          _buildChartLegendChip(
+                            'Đã hoàn thành',
+                            Colors.green.shade400,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Chưa hoàn thành: ${pendingTasks.length}  •  Đã hết hạn: ${overdueTasks.length}  •  Đã hoàn thành: ${completedTasks.length}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.blueGrey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: tasks.isEmpty
+                            ? const Center(
+                                child: Text('Không có công việc trong ngày này.'),
+                              )
+                            : ListView.separated(
+                                itemCount: tasks.length,
+                                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                                itemBuilder: (context, index) {
+                                  final task = tasks[index];
+                                  final isOverdue =
+                                      !task.completed && _isTaskOverdue(task, DateTime.now());
+                                  final statusLabel = task.completed
+                                      ? 'Đã hoàn thành'
+                                      : (isOverdue ? 'Đã hết hạn' : 'Chưa hoàn thành');
+                                  final statusColor = task.completed
+                                      ? Colors.green.shade700
+                                      : (isOverdue
+                                          ? Colors.red.shade700
+                                          : Colors.orange.shade700);
+
+                                  return Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blueGrey.shade50,
+                                      borderRadius: BorderRadius.zero,
+                                      border: Border.all(
+                                        color: Colors.blueGrey.shade100,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                task.title,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 4,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: statusColor.withValues(alpha: 0.12),
+                                                borderRadius: BorderRadius.zero,
+                                                border: Border.all(
+                                                  color: statusColor.withValues(alpha: 0.35),
+                                                ),
+                                              ),
+                                              child: Text(
+                                                statusLabel,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: statusColor,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (task.note.trim().isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            task.note,
+                                            style: const TextStyle(fontSize: 12),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          'Hạn: ${_formatExactDateTime(task.scheduledAt)}',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.blueGrey.shade600,
+                                          ),
+                                        ),
+                                        if (task.checkedAt != null) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            'Hoàn thành lúc: ${_formatExactDateTime(task.checkedAt!)}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.blueGrey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-          const Spacer(),
-          Text(
-            '$value',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -4576,26 +6349,119 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     .where((t) => !t.completed && _isTaskOverdue(t, now))
                     .toList();
 
-                if (tasks.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('Chưa có công việc nào.'),
-                  );
-                }
-
                 const listHeight = 420.0;
                 return DefaultTabController(
                   length: 3,
                   child: Column(
                     children: [
-                      const TabBar(
-                        tabs: [
-                          Tab(text: 'Chưa hoàn thành'),
-                          Tab(text: 'Đã hết hạn'),
-                          Tab(text: 'Đã hoàn thành'),
+                      SizedBox(
+                        height: 56,
+                        child: TabBar(
+                          labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                          dividerColor: Colors.transparent,
+                          indicatorColor: Theme.of(context).colorScheme.primary,
+                          indicatorWeight: 2.4,
+                          tabs: [
+                          Tab(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: Colors.orange.withValues(alpha: 0.35),
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Text(
+                                    'Chưa hoàn thành',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                  Text(
+                                    '${pendingTasks.length}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Tab(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: Colors.red.withValues(alpha: 0.32),
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Text(
+                                    'Đã hết hạn',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                  Text(
+                                    '${overdueTasks.length}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Tab(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: Colors.green.withValues(alpha: 0.35),
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Text(
+                                    'Đã hoàn thành',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                  Text(
+                                    '${completedTasks.length}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
+                        ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       SizedBox(
                         height: listHeight,
                         child: TabBarView(
@@ -4642,254 +6508,243 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   Widget _buildShareBoxCard(_FamilyScope scope, {bool fullScreen = false}) {
     const listHeight = 380.0;
     final content = Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Chat',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Khung chat chung cho tin nhắn và ảnh/video. Cha/Mẹ ở bên phải, Con ở bên trái.',
-            ),
-            const SizedBox(height: 10),
-            _buildShareBoxUploadPanel(scope),
-            const SizedBox(height: 12),
-            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _shareStream(scope),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return const Text('Không thể tải media ShareBox.');
-                }
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Chat',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Khung chat chung cho tin nhắn và ảnh/video. Cha/Mẹ ở bên phải, Con ở bên trái.',
+          ),
+          const SizedBox(height: 10),
+          _buildShareBoxUploadPanel(scope),
+          const SizedBox(height: 12),
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _shareStream(scope),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Text('Không thể tải media ShareBox.');
+              }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
 
-                final mediaEntries =
+              final mediaEntries =
                   snapshot.data?.docs
-                    .where(
-                      (doc) =>
-                        !_isDeletedForUser(doc.data(), scope.selfUid),
-                    )
-                    .map((d) => _ShareImage.fromDoc(d))
-                    .toList() ??
-                    [];
+                      .where(
+                        (doc) => !_isDeletedForUser(doc.data(), scope.selfUid),
+                      )
+                      .map((d) => _ShareImage.fromDoc(d))
+                      .toList() ??
+                  [];
 
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _chatStream(scope),
-                  builder: (context, chatSnapshot) {
-                    if (chatSnapshot.hasError) {
-                      return Container(
-                        width: double.infinity,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.red.shade200),
-                          borderRadius: BorderRadius.circular(10),
-                          color: Colors.red.shade50,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: const Text(
-                          'Không thể tải chat. Kiểm tra Firestore Rules để cấp quyền đọc/ghi chatMessages.',
-                          textAlign: TextAlign.center,
-                        ),
-                      );
-                    }
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _chatStream(scope),
+                builder: (context, chatSnapshot) {
+                  if (chatSnapshot.hasError) {
+                    return Container(
+                      width: double.infinity,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.red.shade200),
+                        borderRadius: BorderRadius.circular(10),
+                        color: Colors.red.shade50,
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: const Text(
+                        'Không thể tải chat. Kiểm tra Firestore Rules để cấp quyền đọc/ghi chatMessages.',
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
 
-                    if (chatSnapshot.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    }
+                  if (chatSnapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
 
-                    final chatEntries =
-                        chatSnapshot.data?.docs
-                            .where(
-                              (doc) => !_isDeletedForUser(
-                                doc.data(),
-                                scope.selfUid,
-                              ),
-                            )
-                            .map((d) => _ChatMessage.fromDoc(d))
-                            .toList() ??
-                        [];
+                  final chatEntries =
+                      chatSnapshot.data?.docs
+                          .where(
+                            (doc) =>
+                                !_isDeletedForUser(doc.data(), scope.selfUid),
+                          )
+                          .map((d) => _ChatMessage.fromDoc(d))
+                          .toList() ??
+                      [];
 
-                    final timelineItems = <_ShareTimelineItem>[
-                      ...mediaEntries.map(_ShareTimelineItem.media),
-                      ...chatEntries.map(_ShareTimelineItem.chat),
-                    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                  final timelineItems = <_ShareTimelineItem>[
+                    ...mediaEntries.map(_ShareTimelineItem.media),
+                    ...chatEntries.map(_ShareTimelineItem.chat),
+                  ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-                    if (timelineItems.isEmpty) {
-                      return const Text('Chưa có nội dung nào trong Chat.');
-                    }
+                  if (timelineItems.isEmpty) {
+                    return const Text('Chưa có nội dung nào trong Chat.');
+                  }
 
-                    final timelineList = ListView.separated(
-                      reverse: true,
-                      shrinkWrap: fullScreen,
-                      physics: fullScreen
-                          ? const NeverScrollableScrollPhysics()
-                          : null,
-                      itemCount: timelineItems.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final item = timelineItems[index];
-                        final isMine = item.senderUid == scope.selfUid;
-                        final sideLabel = item.senderRole == 'parent'
-                            ? 'Cha/Mẹ'
-                            : 'Con';
-                        final alignment = item.senderRole == 'parent'
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft;
-                        final bubbleColor = item.senderRole == 'parent'
-                            ? Colors.blue.shade50
-                            : Colors.grey.shade100;
-                        final borderColor = item.senderRole == 'parent'
-                            ? Colors.blue.shade200
-                            : Colors.blueGrey.shade200;
+                  final timelineList = ListView.separated(
+                    reverse: true,
+                    shrinkWrap: fullScreen,
+                    physics: fullScreen
+                        ? const NeverScrollableScrollPhysics()
+                        : null,
+                    itemCount: timelineItems.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = timelineItems[index];
+                      final isMine = item.senderUid == scope.selfUid;
+                      final sideLabel = item.senderRole == 'parent'
+                          ? 'Cha/Mẹ'
+                          : 'Con';
+                      final alignment = item.senderRole == 'parent'
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft;
+                      final bubbleColor = item.senderRole == 'parent'
+                          ? Colors.blue.shade50
+                          : Colors.grey.shade100;
+                      final borderColor = item.senderRole == 'parent'
+                          ? Colors.blue.shade200
+                          : Colors.blueGrey.shade200;
 
-                        final bubble = ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 320),
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: bubbleColor,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: borderColor),
-                            ),
-                            child: item.isChat
-                                ? Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        item.chat!.text,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        '$sideLabel • ${_formatDateTime(item.createdAt)}',
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.black54,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      GestureDetector(
-                                        onTap: () =>
-                                            _openImagePreview(item.media!),
-                                        child: item.media!.isVideo
-                                            ? Container(
-                                                height: 72,
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black12,
-                                                  borderRadius:
-                                                      BorderRadius.circular(8),
-                                                ),
-                                                child: const Center(
-                                                  child: Icon(
-                                                    Icons.videocam,
-                                                    size: 28,
-                                                  ),
-                                                ),
-                                              )
-                                            : ClipRRect(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                child: Image.network(
-                                                  item.media!.imageUrl,
-                                                  height: 120,
-                                                  width: double.infinity,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (_, _, _) =>
-                                                      const SizedBox(
-                                                    height: 72,
-                                                    child: Center(
-                                                      child: Icon(
-                                                        Icons.broken_image,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                      ),
-                                      if (item.media!.caption
-                                          .trim()
-                                          .isNotEmpty) ...[
-                                        const SizedBox(height: 6),
-                                        Text(item.media!.caption.trim()),
-                                      ],
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        '$sideLabel • ${item.media!.isVideo ? 'Video' : 'Ảnh'} • ${_formatDateTime(item.createdAt)}',
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.black54,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                      final bubble = ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: bubbleColor,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: borderColor),
                           ),
-                        );
-
-                        return Align(
-                          alignment: alignment,
-                          child: isMine
-                              ? Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                          child: item.isChat
+                              ? Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    IconButton(
-                                      tooltip: 'Tùy chọn',
-                                      icon: const Icon(
-                                        Icons.more_horiz,
-                                        size: 20,
+                                    Text(
+                                      item.chat!.text,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.black87,
                                       ),
-                                      onPressed: () =>
-                                          _showMyMessageActions(scope, item),
                                     ),
-                                    bubble,
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '$sideLabel • ${_formatDateTime(item.createdAt)}',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
                                   ],
                                 )
-                              : bubble,
-                        );
-                      },
-                    );
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () =>
+                                          _openImagePreview(item.media!),
+                                      child: item.media!.isVideo
+                                          ? Container(
+                                              height: 72,
+                                              decoration: BoxDecoration(
+                                                color: Colors.black12,
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: const Center(
+                                                child: Icon(
+                                                  Icons.videocam,
+                                                  size: 28,
+                                                ),
+                                              ),
+                                            )
+                                          : ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: Image.network(
+                                                item.media!.imageUrl,
+                                                height: 120,
+                                                width: double.infinity,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, _, _) =>
+                                                    const SizedBox(
+                                                      height: 72,
+                                                      child: Center(
+                                                        child: Icon(
+                                                          Icons.broken_image,
+                                                        ),
+                                                      ),
+                                                    ),
+                                              ),
+                                            ),
+                                    ),
+                                    if (item.media!.caption
+                                        .trim()
+                                        .isNotEmpty) ...[
+                                      const SizedBox(height: 6),
+                                      Text(item.media!.caption.trim()),
+                                    ],
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '$sideLabel • ${item.media!.isVideo ? 'Video' : 'Ảnh'} • ${_formatDateTime(item.createdAt)}',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                      );
 
-                    if (fullScreen) {
-                      return timelineList;
-                    }
+                      return Align(
+                        alignment: alignment,
+                        child: isMine
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Tùy chọn',
+                                    icon: const Icon(
+                                      Icons.more_horiz,
+                                      size: 20,
+                                    ),
+                                    onPressed: () =>
+                                        _showMyMessageActions(scope, item),
+                                  ),
+                                  bubble,
+                                ],
+                              )
+                            : bubble,
+                      );
+                    },
+                  );
 
-                    return SizedBox(
-                      height: listHeight,
-                      child: timelineList,
-                    );
-                  },
-                );
-              },
-            ),
-          ],
-        ),
+                  if (fullScreen) {
+                    return timelineList;
+                  }
+
+                  return SizedBox(height: listHeight, child: timelineList);
+                },
+              );
+            },
+          ),
+        ],
+      ),
     );
 
     if (fullScreen) {
-      return SingleChildScrollView(
-        child: content,
-      );
+      return SingleChildScrollView(child: content);
     }
 
     return Card(child: content);
@@ -4903,14 +6758,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             FilledButton.icon(
-              onPressed: _uploadingImage ? null : () => _showShareComposer(scope),
+              onPressed: _uploadingImage
+                  ? null
+                  : () => _showShareComposer(scope),
               icon: const Icon(Icons.add_circle_outline),
               label: const Text('Tạo tin nhắn/ảnh/video'),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Một nút duy nhất để gửi tin nhắn, chụp ảnh, chọn nhiều ảnh hoặc chọn video trong Chat.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
+              style: TextStyle(fontSize: 12, color: _adaptiveTextSecondary),
             ),
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
@@ -4926,9 +6783,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         children: [
                           Text(
                             'Tiến trình tệp hiện tại: ${(_currentImageProgress * 100).toStringAsFixed(0)}%${_currentImageName.isEmpty ? '' : ' • $_currentImageName'}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Colors.black54,
+                              color: _adaptiveTextSecondary,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -4941,9 +6798,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           const SizedBox(height: 10),
                           Text(
                             'Tiến trình tổng: ${(_uploadProgress * 100).toStringAsFixed(0)}%',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Colors.black54,
+                              color: _adaptiveTextSecondary,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -4956,9 +6813,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           const SizedBox(height: 6),
                           Text(
                             _uploadProgressLabel,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Colors.black54,
+                              color: _adaptiveTextSecondary,
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -5085,7 +6942,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       return Center(
         child: Text(
           emptyMessage,
-          style: const TextStyle(color: Colors.black54),
+          style: TextStyle(color: _adaptiveTextSecondary),
         ),
       );
     }
@@ -5115,7 +6972,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 ? null
                 : Checkbox(
                     value: task.completed,
-                onChanged: canToggleCompletion
+                    onChanged: canToggleCompletion
                         ? (value) => _toggleTask(scope, task, value ?? false)
                         : null,
                   ),
@@ -5147,6 +7004,56 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   bool _isTaskOverdue(_TaskItem task, DateTime now) {
     return !task.completed && task.scheduledAt.isBefore(now);
+  }
+}
+
+class _AdminMenuSheet extends StatefulWidget {
+  const _AdminMenuSheet({
+    required this.isDarkMode,
+    required this.onToggleDarkMode,
+  });
+
+  final bool isDarkMode;
+  final ValueChanged<bool>? onToggleDarkMode;
+
+  @override
+  State<_AdminMenuSheet> createState() => _AdminMenuSheetState();
+}
+
+class _AdminMenuSheetState extends State<_AdminMenuSheet> {
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('Quản lý tài khoản'),
+              subtitle: const Text('Xem và cập nhật thông tin liên kết'),
+              onTap: () => Navigator.of(context).pop('account'),
+            ),
+            SwitchListTile(
+              value: widget.isDarkMode,
+              onChanged: widget.onToggleDarkMode == null
+                  ? null
+                  : (value) {
+                      widget.onToggleDarkMode!(value);
+                    },
+              title: const Text('Chế độ tối'),
+              secondary: const Icon(Icons.brightness_6_outlined),
+            ),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Đăng xuất'),
+              onTap: () => Navigator.of(context).pop('logout'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -5200,13 +7107,10 @@ class _CapturePreviewPage extends StatelessWidget {
                         ],
                       )
                     : previewBytes == null
-                        ? const SizedBox.shrink()
-                        : InteractiveViewer(
-                            child: Image.memory(
-                              previewBytes!,
-                              fit: BoxFit.contain,
-                            ),
-                          ),
+                    ? const SizedBox.shrink()
+                    : InteractiveViewer(
+                        child: Image.memory(previewBytes!, fit: BoxFit.contain),
+                      ),
               ),
             ),
             Positioned(
@@ -5214,9 +7118,9 @@ class _CapturePreviewPage extends StatelessWidget {
               left: 0,
               child: IconButton(
                 tooltip: 'Quay lại',
-                onPressed: () => Navigator.of(context).pop(
-                  const _CapturePreviewResult(send: false),
-                ),
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(const _CapturePreviewResult(send: false)),
                 icon: const Icon(Icons.arrow_back, color: Colors.white),
               ),
             ),
@@ -5239,10 +7143,10 @@ class _CapturePreviewPage extends StatelessWidget {
               bottom: 16,
               child: FloatingActionButton(
                 tooltip: 'Gửi',
-                backgroundColor: Colors.blueAccent,
-                onPressed: () => Navigator.of(context).pop(
-                  const _CapturePreviewResult(send: true),
-                ),
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(const _CapturePreviewResult(send: true)),
                 child: const Icon(Icons.send_rounded, color: Colors.white),
               ),
             ),
@@ -5406,9 +7310,7 @@ class _PendingShareUpload {
   final _ShareMediaType mediaType;
   final String? sourceId;
 
-  _PendingShareUpload copyWith({
-    String? caption,
-  }) {
+  _PendingShareUpload copyWith({String? caption}) {
     return _PendingShareUpload(
       file: file,
       fileName: fileName,
@@ -5462,6 +7364,30 @@ class _TaskItem {
       checkedAt: checkedAt is Timestamp ? checkedAt.toDate() : null,
     );
   }
+}
+
+enum _TaskNotificationType { completed, overdue }
+
+class _TaskNotification {
+  const _TaskNotification({
+    required this.id,
+    required this.taskId,
+    required this.title,
+    required this.note,
+    required this.type,
+    required this.eventAt,
+    required this.scheduledAt,
+    required this.isUnread,
+  });
+
+  final String id;
+  final String taskId;
+  final String title;
+  final String note;
+  final _TaskNotificationType type;
+  final DateTime eventAt;
+  final DateTime scheduledAt;
+  final bool isUnread;
 }
 
 class _ShareImage {
@@ -5582,4 +7508,3 @@ class _ShareTimelineItem {
 
   bool get isChat => chat != null;
 }
-
