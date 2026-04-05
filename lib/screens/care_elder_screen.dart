@@ -19,6 +19,7 @@ import '../services/background_location_service.dart';
 import '../services/location_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/emergency_contact_service.dart';
+import '../services/push_notification_service.dart';
 
 class CareElderScreen extends StatefulWidget {
   const CareElderScreen({
@@ -29,6 +30,7 @@ class CareElderScreen extends StatefulWidget {
 
   final bool isDarkMode;
   final ValueChanged<bool>? onToggleDarkMode;
+
 
   @override
   State<CareElderScreen> createState() => _CareElderScreenState();
@@ -1267,6 +1269,9 @@ class _CareElderScreenState extends State<CareElderScreen>
       if (confirmed != true) return;
     }
 
+    // Unregister this device token while still authenticated.
+    // This prevents notifications leaking when switching accounts on the same device.
+    await PushNotificationService.instance.unregisterCurrentUserToken();
     await FirebaseAuth.instance.signOut();
     await _clearCachedProfile();
     _emailController.clear();
@@ -1396,6 +1401,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   StreamSubscription<Position>? _positionStreamSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   _parentLocationSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _shareboxDeletedSub;
   bool _updatingLocation = false;
 
   static const int _maxImageSizeBytes = 5 * 1024 * 1024;
@@ -1438,6 +1444,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   String _uploadProgressLabel = '';
   CancelToken? _activeUploadCancelToken;
   final ValueNotifier<int> _shareBoxUiVersion = ValueNotifier<int>(0);
+  final Set<String> _shareboxLocalDeletedKeys = <String>{};
+  final Set<String> _shareboxOptimisticRevokedKeys = <String>{};
   DateTime _lastProgressPaintAt = DateTime.fromMillisecondsSinceEpoch(0);
   double _lastPaintedOverallProgress = 0;
   double _lastPaintedCurrentProgress = 0;
@@ -1463,8 +1471,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   int _distributionWeekOffset = 0;
   String? _scopeError;
   _FamilyScope? _scope;
-  Set<String> _readNotificationIds = <String>{};
-  Set<String> _deletedNotificationIds = <String>{};
   int _shareboxLastSeenMillis = 0;
   bool _notificationPanelSessionActive = false;
   Set<String> _notificationPanelOpenedUnreadIds = <String>{};
@@ -1491,11 +1497,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     }
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _taskCollection(scope).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(scope.selfUid)
+          .collection('notifications')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
       builder: (context, snapshot) {
         final docs = snapshot.data?.docs ?? const [];
-        final notifications = _buildTaskNotifications(docs);
-        final unreadCount = notifications.where((item) => item.isUnread).length;
+        final unreadCount = docs.where((d) => d.data()['read'] != true).length;
 
         return IconButton(
           tooltip: 'Thông báo',
@@ -1545,32 +1555,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Future<void> _loadNotificationStates(_FamilyScope scope) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-
-    final read = prefs.getStringList(_notificationReadKey(scope)) ?? const [];
-    final deleted =
-        prefs.getStringList(_notificationDeletedKey(scope)) ?? const [];
-
-    setState(() {
-      _readNotificationIds = read.toSet();
-      _deletedNotificationIds = deleted.toSet();
-    });
-  }
-
-  Future<void> _saveNotificationStates(_FamilyScope scope) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _notificationReadKey(scope),
-      _readNotificationIds.toList(),
-    );
-    await prefs.setStringList(
-      _notificationDeletedKey(scope),
-      _deletedNotificationIds.toList(),
-    );
-  }
-
   Future<void> _loadShareBoxSeenState(_FamilyScope scope) async {
     final prefs = await SharedPreferences.getInstance();
     final key = _shareboxLastSeenKey(scope);
@@ -1605,12 +1589,99 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return 'sharebox.lastSeen.${scope.selfUid}.${scope.channelId}';
   }
 
-  String _notificationReadKey(_FamilyScope scope) {
-    return 'notifications.read.${scope.selfUid}.${scope.channelId}';
+  String _shareboxLocalDeletedKey(_FamilyScope scope) {
+    return 'sharebox.deletedForMe.${scope.selfUid}.${scope.channelId}';
   }
 
-  String _notificationDeletedKey(_FamilyScope scope) {
-    return 'notifications.deleted.${scope.selfUid}.${scope.channelId}';
+  String _timelineLocalKey({required bool isChat, required String id}) {
+    return '${isChat ? 'chat' : 'media'}:$id';
+  }
+
+  void _setOptimisticRevokedKey(String key, bool isRevoked) {
+    if (mounted) {
+      setState(() {
+        if (isRevoked) {
+          _shareboxOptimisticRevokedKeys.add(key);
+        } else {
+          _shareboxOptimisticRevokedKeys.remove(key);
+        }
+      });
+
+      // Chat page is pushed as a separate route; trigger rebuild there too.
+      _notifyShareBoxUi();
+    } else {
+      if (isRevoked) {
+        _shareboxOptimisticRevokedKeys.add(key);
+      } else {
+        _shareboxOptimisticRevokedKeys.remove(key);
+      }
+    }
+  }
+
+  bool _isLocallyDeletedTimelineDoc({required bool isChat, required String id}) {
+    return _shareboxLocalDeletedKeys.contains(
+      _timelineLocalKey(isChat: isChat, id: id),
+    );
+  }
+
+  Future<void> _loadShareBoxLocalDeletedState(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getStringList(_shareboxLocalDeletedKey(scope)) ?? const [];
+    if (!mounted) return;
+    setState(() {
+      _shareboxLocalDeletedKeys
+        ..clear()
+        ..addAll(keys);
+    });
+  }
+
+  Future<void> _persistShareBoxLocalDeletedState(_FamilyScope scope) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _shareboxLocalDeletedKey(scope),
+      _shareboxLocalDeletedKeys.toList(growable: false),
+    );
+  }
+
+  CollectionReference<Map<String, dynamic>> _shareboxDeletedCollection(
+    _FamilyScope scope,
+  ) {
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(scope.selfUid)
+        .collection('shareboxDeleted');
+  }
+
+  void _startShareboxDeletedListener(_FamilyScope scope) {
+    _shareboxDeletedSub?.cancel();
+    _shareboxDeletedSub = _shareboxDeletedCollection(scope)
+        .where('channelId', isEqualTo: scope.channelId)
+        .snapshots()
+        .listen((snapshot) async {
+      final syncedKeys = <String>{};
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final kind = (data['kind'] ?? '').toString();
+        final targetId = (data['targetId'] ?? '').toString();
+        if (targetId.isEmpty) continue;
+        if (kind == 'chat') {
+          syncedKeys.add(_timelineLocalKey(isChat: true, id: targetId));
+        } else if (kind == 'media') {
+          syncedKeys.add(_timelineLocalKey(isChat: false, id: targetId));
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _shareboxLocalDeletedKeys.addAll(syncedKeys);
+      });
+      await _persistShareBoxLocalDeletedState(scope);
+      _notifyShareBoxUi();
+    }, onError: (Object error) {
+      // Permission/network errors here should not crash the app.
+      // Local-only hide still works even without sync.
+      debugPrint('shareboxDeleted listener failed: $error');
+    });
   }
 
   bool _isUnreadShareBoxItem(
@@ -1632,11 +1703,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   int _countUnreadShareBoxItems(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     String selfUid,
-    int cutoffMillis,
-  ) {
+    int cutoffMillis, {
+    required bool isChat,
+  }) {
     return docs.where((doc) {
       final data = doc.data();
       if (_isDeletedForUser(data, selfUid)) return false;
+      if (_isLocallyDeletedTimelineDoc(isChat: isChat, id: doc.id)) {
+        return false;
+      }
       return _isUnreadShareBoxItem(data, selfUid, cutoffMillis);
     }).length;
   }
@@ -1680,80 +1755,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
   }
 
-  List<_TaskNotification> _buildTaskNotifications(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  CollectionReference<Map<String, dynamic>> _userNotificationsCollection(
+    _FamilyScope scope,
   ) {
-    if (!widget.isChildView) {
-      return <_TaskNotification>[];
-    }
-
-    final now = DateTime.now();
-    final notifications = <_TaskNotification>[];
-
-    for (final doc in docs) {
-      final data = doc.data();
-      final title = (data['title'] ?? 'Công việc').toString();
-      final note = (data['note'] ?? '').toString();
-      final completed = data['completed'] == true;
-      final checkedAt = data['checkedAt'];
-      final checkedByRole = (data['checkedByRole'] ?? '').toString();
-      final scheduledAt = data['scheduledAt'];
-      final scheduledTime = scheduledAt is Timestamp
-          ? scheduledAt.toDate()
-          : DateTime.now();
-
-      if (completed && checkedByRole == 'parent' && checkedAt is Timestamp) {
-        final eventAt = checkedAt.toDate();
-        final id = '${doc.id}_completed_${eventAt.millisecondsSinceEpoch}';
-        if (_deletedNotificationIds.contains(id)) {
-          continue;
-        }
-
-        notifications.add(
-          _TaskNotification(
-            id: id,
-            taskId: doc.id,
-            title: title,
-            note: note,
-            type: _TaskNotificationType.completed,
-            eventAt: eventAt,
-            scheduledAt: scheduledTime,
-            isUnread: !_readNotificationIds.contains(id),
-          ),
-        );
-        continue;
-      }
-
-      if (!completed &&
-          scheduledAt is Timestamp &&
-          scheduledAt.toDate().isBefore(now)) {
-        final eventAt = scheduledAt.toDate();
-        final id = '${doc.id}_overdue_${eventAt.millisecondsSinceEpoch}';
-        if (_deletedNotificationIds.contains(id)) {
-          continue;
-        }
-
-        notifications.add(
-          _TaskNotification(
-            id: id,
-            taskId: doc.id,
-            title: title,
-            note: note,
-            type: _TaskNotificationType.overdue,
-            eventAt: eventAt,
-            scheduledAt: scheduledTime,
-            isUnread: !_readNotificationIds.contains(id),
-          ),
-        );
-      }
-    }
-
-    notifications.sort((a, b) => b.eventAt.compareTo(a.eventAt));
-
-    return notifications;
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(scope.selfUid)
+        .collection('notifications');
   }
 
-  Future<void> _setNotificationReadStatus(
+  Future<void> _setInboxNotificationRead(
     _FamilyScope scope,
     String notificationId,
     bool isRead,
@@ -1761,196 +1772,176 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     if (_notificationPanelSessionActive) {
       _notificationPanelTouchedIds.add(notificationId);
     }
-
-    setState(() {
-      if (isRead) {
-        _readNotificationIds.add(notificationId);
-      } else {
-        _readNotificationIds.remove(notificationId);
-      }
-    });
-    
-    // Trigger immediate UI update in notification panel
     _notificationStatusChanged.value++;
-    
-    await _saveNotificationStates(scope);
+
+    try {
+      await _userNotificationsCollection(scope).doc(notificationId).set({
+        'read': isRead,
+        'readAt': isRead ? FieldValue.serverTimestamp() : null,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      _showMessage('Không thể cập nhật trạng thái: $e');
+    }
   }
 
-  Future<void> _deleteNotification(
+  Future<void> _deleteInboxNotification(
     _FamilyScope scope,
     String notificationId,
   ) async {
     if (_notificationPanelSessionActive) {
       _notificationPanelTouchedIds.add(notificationId);
     }
-
-    setState(() {
-      _deletedNotificationIds.add(notificationId);
-      _readNotificationIds.remove(notificationId);
-    });
-    
-    // Trigger immediate UI update in notification panel
     _notificationStatusChanged.value++;
-    
-    await _saveNotificationStates(scope);
+
+    try {
+      await _userNotificationsCollection(scope).doc(notificationId).delete();
+    } catch (e) {
+      _showMessage('Không thể xóa thông báo: $e');
+    }
   }
 
-  Future<void> _openTaskDetailFromNotification(
+  Future<void> _openInboxNotification(
     _FamilyScope scope,
-    _TaskNotification notification,
+    _UserInboxNotification item,
   ) async {
-    final taskDoc = await _taskCollection(scope).doc(notification.taskId).get();
-    if (!mounted) return;
-
-    if (!taskDoc.exists) {
-      _showMessage('Công việc đã bị xóa hoặc không còn tồn tại.');
-      return;
-    }
-
-    final task = _TaskItem.fromDoc(taskDoc);
-    final statusText = task.completed ? 'Đã hoàn thành' : 'Chưa hoàn thành';
-    final completedAt = task.checkedAt != null
-        ? _formatExactDateTime(task.checkedAt!)
-        : 'Chưa có';
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: Text(task.title.toUpperCase()),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Ghi chú: ${task.note.isEmpty ? '(trống)' : task.note}'),
-              const SizedBox(height: 8),
-              Text('Thời hạn: ${_formatExactDateTime(task.scheduledAt)}'),
-              const SizedBox(height: 4),
-              Text('Trạng thái: $statusText'),
-              const SizedBox(height: 4),
-              Text('Hoàn thành lúc: $completedAt'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Đóng'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _handleNotificationAction(
-    _FamilyScope scope,
-    _TaskNotification item,
-    String value,
-  ) async {
-    if (value == 'delete') {
-      await _deleteNotification(scope, item.id);
-      return;
-    }
-
-    if (value == 'mark_read') {
-      await _setNotificationReadStatus(scope, item.id, true);
-      return;
-    }
-
-    if (value == 'mark_unread') {
-      await _setNotificationReadStatus(scope, item.id, false);
-    }
-  }
-
-  String _notificationHeadline(_TaskNotification item) {
-    if (item.type == _TaskNotificationType.completed) {
-      return 'Cha/Mẹ đã hoàn thành "${item.title}"';
-    }
-    return 'Cha/Mẹ chưa hoàn thành "${item.title}" (đã quá hạn)';
-  }
-
-  IconData _notificationIcon(_TaskNotification item) {
-    return item.type == _TaskNotificationType.completed
-        ? Icons.notifications_active
-        : Icons.warning_amber_rounded;
-  }
-
-  Color _notificationIconColor(_TaskNotification item) {
-    return item.type == _TaskNotificationType.completed
-        ? Theme.of(context).colorScheme.primary
-        : Colors.orange;
-  }
-
-  Widget _buildNotificationTile(_FamilyScope scope, _TaskNotification item) {
-    final relative = _formatRelativeTime(item.eventAt);
-    final exact = _formatExactDateTime(item.eventAt);
-
-    // Determine background and border colors based on read status and notification type
-    final Color backgroundColor;
-    final Color borderColor;
-    
+    // Mark read immediately.
     if (item.isUnread) {
-      // Unread: use type-specific colors
-      if (item.type == _TaskNotificationType.completed) {
-        backgroundColor = Colors.green.shade200;
-        borderColor = Colors.green.shade400;
-      } else {
-        backgroundColor = Colors.red.shade200;
-        borderColor = Colors.red.shade400;
-      }
-    } else {
-      // Read: use grey color
-      backgroundColor = Colors.grey.shade200;
-      borderColor = Colors.grey.shade400;
+      unawaited(_setInboxNotificationRead(scope, item.id, true));
     }
 
-    // Text color: black when unread, grey when read
-    final Color textColor = item.isUnread ? Colors.black87 : Colors.black54;
-    final Color subtitleColor = item.isUnread ? Colors.black54 : Colors.black38;
+    if (item.type == 'chat') {
+      await _openShareBoxBottomSheet(scope);
+      return;
+    }
+
+    if (item.type == 'task' && (item.taskId ?? '').isNotEmpty) {
+      try {
+        final taskDoc =
+            await _taskCollection(scope).doc(item.taskId!).get();
+        if (!mounted) return;
+
+        if (!taskDoc.exists) {
+          _showMessage('Công việc đã bị xóa hoặc không còn tồn tại.');
+          return;
+        }
+
+        final task = _TaskItem.fromDoc(taskDoc);
+        final statusText = task.completed ? 'Đã hoàn thành' : 'Chưa hoàn thành';
+        final completedAt = task.checkedAt != null
+            ? _formatExactDateTime(task.checkedAt!)
+            : 'Chưa có';
+
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: Text(task.title.toUpperCase()),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Ghi chú: ${task.note.isEmpty ? '(trống)' : task.note}'),
+                  const SizedBox(height: 8),
+                  Text('Thời hạn: ${_formatExactDateTime(task.scheduledAt)}'),
+                  const SizedBox(height: 4),
+                  Text('Trạng thái: $statusText'),
+                  const SizedBox(height: 4),
+                  Text('Hoàn thành lúc: $completedAt'),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          },
+        );
+      } catch (e) {
+        _showMessage('Không thể mở chi tiết công việc: $e');
+      }
+      return;
+    }
+  }
+
+  Widget _buildInboxNotificationTile(
+    _FamilyScope scope,
+    _UserInboxNotification item,
+  ) {
+    final relative = _formatRelativeTime(item.createdAt);
+    final exact = _formatExactDateTime(item.createdAt);
+
+    final scheme = Theme.of(context).colorScheme;
+    final baseSurface = scheme.surfaceContainerHighest;
+
+    final isUnread = item.isUnread;
+    final backgroundColor = isUnread
+        ? Color.alphaBlend(scheme.primary.withValues(alpha: 0.14), baseSurface)
+        : baseSurface;
+    final borderColor = isUnread
+        ? scheme.primary.withValues(alpha: 0.5)
+        : scheme.outlineVariant.withValues(alpha: 0.7);
+
+    final icon = item.type == 'chat'
+        ? Icons.chat_bubble_outline
+        : Icons.notifications_active;
 
     return Container(
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: borderColor,
-        ),
+        border: Border.all(color: borderColor),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 8),
         leading: Icon(
-          _notificationIcon(item),
-          color: _notificationIconColor(item),
+          icon,
+          color: Theme.of(context).colorScheme.primary,
         ),
         title: Text(
-          _notificationHeadline(item),
+          item.title,
           style: TextStyle(
-            fontWeight: item.isUnread ? FontWeight.w700 : FontWeight.w500,
-            color: textColor,
+            fontWeight: isUnread ? FontWeight.w700 : FontWeight.w500,
+            color: scheme.onSurface,
           ),
         ),
         subtitle: Text(
-          '$relative\n$exact',
-          style: TextStyle(color: subtitleColor),
+          '${item.body}\n$relative\n$exact',
+          style: TextStyle(
+            color: scheme.onSurfaceVariant,
+          ),
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
         ),
         isThreeLine: true,
         trailing: PopupMenuButton<String>(
           tooltip: 'Tùy chọn thông báo',
-          onSelected: (value) => _handleNotificationAction(scope, item, value),
+          onSelected: (value) {
+            if (value == 'delete') {
+              _deleteInboxNotification(scope, item.id);
+              return;
+            }
+            if (value == 'mark_read') {
+              _setInboxNotificationRead(scope, item.id, true);
+              return;
+            }
+            if (value == 'mark_unread') {
+              _setInboxNotificationRead(scope, item.id, false);
+            }
+          },
           itemBuilder: (_) => [
             const PopupMenuItem<String>(
               value: 'delete',
               child: Text('Xóa thông báo'),
             ),
             PopupMenuItem<String>(
-              value: item.isUnread ? 'mark_read' : 'mark_unread',
-              child: Text(
-                item.isUnread ? 'Đánh dấu đã đọc' : 'Đánh dấu chưa đọc',
-              ),
+              value: isUnread ? 'mark_read' : 'mark_unread',
+              child: Text(isUnread ? 'Đánh dấu đã đọc' : 'Đánh dấu chưa đọc'),
             ),
           ],
         ),
-        onTap: () => _openTaskDetailFromNotification(scope, item),
+        onTap: () => _openInboxNotification(scope, item),
       ),
     );
   }
@@ -1966,17 +1957,36 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _ShareTimelineItem item,
   ) async {
     try {
-      if (item.isChat) {
-        await _chatCollection(scope).doc(item.chat!.id).set({
-          'deletedFor': FieldValue.arrayUnion([scope.selfUid]),
-        }, SetOptions(merge: true));
+      final localKey = _timelineLocalKey(
+        isChat: item.isChat,
+        id: item.isChat ? item.chat!.id : item.media!.id,
+      );
+
+      final kind = item.isChat ? 'chat' : 'media';
+      final targetId = item.isChat ? item.chat!.id : item.media!.id;
+      final docId = '${scope.channelId}_${kind}_$targetId';
+
+      if (mounted) {
+        setState(() {
+          _shareboxLocalDeletedKeys.add(localKey);
+        });
       } else {
-        await _shareCollection(scope).doc(item.media!.id).set({
-          'deletedFor': FieldValue.arrayUnion([scope.selfUid]),
-        }, SetOptions(merge: true));
+        _shareboxLocalDeletedKeys.add(localKey);
       }
-    } on FirebaseException catch (e) {
-      _showMessage('Không thể xóa ở phía tôi: ${e.message ?? e.code}');
+
+      await _persistShareBoxLocalDeletedState(scope);
+
+      // Sync across devices: persist to Firestore under the signed-in user.
+      // If Firestore rules/network block this, local hide still works.
+      unawaited(
+        _shareboxDeletedCollection(scope).doc(docId).set({
+          'channelId': scope.channelId,
+          'kind': kind,
+          'targetId': targetId,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true)),
+      );
+      _notifyShareBoxUi();
     } catch (e) {
       _showMessage('Không thể xóa ở phía tôi: $e');
     }
@@ -2007,6 +2017,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
 
     if (confirmed != true) return;
+
+    final localKey = _timelineLocalKey(
+      isChat: item.isChat,
+      id: item.isChat ? item.chat!.id : item.media!.id,
+    );
+    _setOptimisticRevokedKey(localKey, true);
 
     try {
       if (item.isChat) {
@@ -2052,7 +2068,39 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       _showMessage('Không thể thu hồi: ${e.message ?? e.code}');
     } catch (e) {
       _showMessage('Không thể thu hồi: $e');
+    } finally {
+      _setOptimisticRevokedKey(localKey, false);
     }
+  }
+
+  Future<void> _openGoogleMapsDirections(double lat, double lng) async {
+    final fallback = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
+    );
+
+    if (kIsWeb) {
+      final ok = await launchUrl(fallback, mode: LaunchMode.externalApplication);
+      if (!ok) _showMessage('Không thể mở Google Maps.');
+      return;
+    }
+
+    final androidUri = Uri.parse('google.navigation:q=$lat,$lng&mode=d');
+    final iosUri =
+        Uri.parse('comgooglemaps://?daddr=$lat,$lng&directionsmode=driving');
+
+    final Uri primary = switch (defaultTargetPlatform) {
+      TargetPlatform.android => androidUri,
+      TargetPlatform.iOS => iosUri,
+      _ => fallback,
+    };
+
+    final okPrimary =
+        await launchUrl(primary, mode: LaunchMode.externalApplication);
+    if (okPrimary) return;
+
+    final okFallback =
+        await launchUrl(fallback, mode: LaunchMode.externalApplication);
+    if (!okFallback) _showMessage('Không thể mở Google Maps.');
   }
 
   Future<void> _showMyMessageActions(
@@ -2121,6 +2169,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _composerUiVersion.dispose();
     _positionStreamSub?.cancel();
     _parentLocationSub?.cancel();
+    _shareboxDeletedSub?.cancel();
     super.dispose();
   }
 
@@ -2311,6 +2360,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               _currentAddress = loc['address']?.toString();
             });
           }
+        }, onError: (Object error) {
+          // Permission/network errors during sign-out should not crash the app.
+          debugPrint('parent location listener failed: $error');
         });
   }
 
@@ -2403,9 +2455,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         _scope = loadedScope;
         _loadingScope = false;
       });
-
-      await _loadNotificationStates(loadedScope);
       await _loadShareBoxSeenState(loadedScope);
+      await _loadShareBoxLocalDeletedState(loadedScope);
+      _startShareboxDeletedListener(loadedScope);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -2430,7 +2482,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return FirebaseFirestore.instance
         .collection('channels')
         .doc(scope.channelId)
-        .collection('sharebox');
+        .collection('Chat');
   }
 
   CollectionReference<Map<String, dynamic>> _chatCollection(
@@ -2747,6 +2799,29 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       final permission = await PhotoManager.requestPermissionExtend();
       if (!permission.isAuth) {
         _showMessage('Cần quyền truy cập thư viện để chọn media.');
+        if (!mounted) return;
+        final shouldOpenSettings = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Cần cấp quyền thư viện'),
+            content: const Text(
+              'Thiết bị chưa cấp quyền truy cập ảnh/video. Bạn có muốn mở Cài đặt để cấp quyền không?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Để sau'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Mở cài đặt'),
+              ),
+            ],
+          ),
+        );
+        if (shouldOpenSettings == true) {
+          await PhotoManager.openSetting();
+        }
         return;
       }
 
@@ -3725,7 +3800,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         final uploaded = await CloudinaryService.uploadBytes(
           bytes: uploadBytes,
           fileName: item.fileName,
-          folder: 'sharebox/${scope.channelId}',
+          folder: 'Chat/${scope.channelId}',
           resourceType: item.mediaType == _ShareMediaType.video
               ? 'video'
               : 'image',
@@ -3799,7 +3874,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
       if (_cancelUploadRequested) {
         _showMessage(
-          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} media.',
+          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} ảnh/video.',
         );
         return;
       }
@@ -3809,20 +3884,20 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           _uploadProgress = 1;
           _currentImageProgress = 1;
           _uploadProgressLabel =
-              'Hoàn tất $successCount/${uploads.length} media';
+              'Hoàn tất $successCount/${uploads.length} ảnh/video';
         });
         _notifyShareBoxUi();
       }
       _showMessage(
-        'Đã chia sẻ $successCount/${uploads.length} media thành công.',
+        'Đã chia sẻ $successCount/${uploads.length} ảnh/video thành công.',
       );
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         _showMessage(
-          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} media.',
+          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} ảnh/video.',
         );
       } else {
-        _showMessage('Upload media thất bại: ${e.message ?? e.toString()}');
+        _showMessage('Upload ảnh/video thất bại: ${e.message ?? e.toString()}');
       }
     } on StateError catch (e) {
       _showMessage(e.message);
@@ -3830,10 +3905,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       final msg = e.toString().toLowerCase();
       if (_cancelUploadRequested || msg.contains('canceled')) {
         _showMessage(
-          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} media.',
+          'Đã hủy upload. Đã gửi thành công $successCount/${uploads.length} ảnh/video.',
         );
       } else {
-        _showMessage('Upload media thất bại: $e');
+        _showMessage('Upload ảnh/video thất bại: $e');
       }
     } finally {
       if (mounted) {
@@ -3957,9 +4032,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
     try {
       await _shareCollection(scope).doc(image.id).delete();
-      _showMessage('Đã xóa media khỏi ShareBox.');
+      _showMessage('Đã xóa ảnh/video khỏi Chat.');
     } catch (e) {
-      _showMessage('Không thể xóa media: $e');
+      _showMessage('Không thể xóa ảnh/video: $e');
     }
   }
 
@@ -4040,10 +4115,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   Future<void> _openAdminMenuSheet() async {
+    final isDarkNow = Theme.of(context).brightness == Brightness.dark;
     final selected = await showModalBottomSheet<String>(
       context: context,
       builder: (sheetContext) => _AdminMenuSheet(
-        isDarkMode: widget.isDarkMode,
+        isDarkMode: isDarkNow,
         onToggleDarkMode: widget.onToggleDarkMode,
       ),
     );
@@ -4125,7 +4201,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final linkedName = (linkedData['name'] ?? '').toString();
 
     var selfPhoneValue = (selfData['phone'] ?? '').toString().trim();
-    var linkedPhoneValue = (linkedData['phone'] ?? '').toString().trim();
+    var linkedPhoneValue = (canEdit
+        ? (selfData['parentPhone'] ?? linkedData['phone'] ?? '')
+        : (linkedData['phone'] ?? ''))
+      .toString()
+      .trim();
 
     final selfPhoneController = TextEditingController(
       text: selfPhoneValue,
@@ -4160,31 +4240,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
                   setPageState(() => isSaving = true);
                   try {
-                    // Rules only allow users to update their own profile.
-                    // Save the child's own phone first, then best-effort sync linked account.
+                    // Firestore rules typically only allow users to update their own profile.
+                    // Save only into the current account to avoid permission-denied.
                     await usersRef.doc(scope.selfUid).set({
                       'phone': selfPhone,
                       'parentPhone': linkedPhone,
+                      'parentUid': scope.partnerUid,
                       'updatedAt': FieldValue.serverTimestamp(),
                     }, SetOptions(merge: true));
-
-                    var linkedSyncBlockedByRules = false;
-                    try {
-                      await usersRef.doc(scope.partnerUid).set({
-                        'phone': linkedPhone,
-                        'childPhone': selfPhone,
-                        // Keep only the latest linked child phone to avoid
-                        // accumulating old numbers for the same account.
-                        'linkedChildPhones': [selfPhone],
-                        'updatedAt': FieldValue.serverTimestamp(),
-                      }, SetOptions(merge: true));
-                    } on FirebaseException catch (e) {
-                      if (e.code == 'permission-denied') {
-                        linkedSyncBlockedByRules = true;
-                      } else {
-                        rethrow;
-                      }
-                    }
 
                     selfPhoneValue = selfPhone;
                     linkedPhoneValue = linkedPhone;
@@ -4195,13 +4258,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         isEditingPhone = false;
                       });
                     }
-                    if (linkedSyncBlockedByRules) {
-                      _showMessage(
-                        'Đã lưu số điện thoại tài khoản Con. Không thể đồng bộ sang tài khoản liên kết do Firestore Rules.',
-                      );
-                    } else {
-                      _showMessage('Đã lưu thông tin tài khoản.');
-                    }
+                    _showMessage('Đã lưu thông tin tài khoản.');
                     await _loadFamilyScope();
                   } on FirebaseException catch (e) {
                     _showMessage('Không thể lưu: ${e.message ?? e.code}');
@@ -4221,12 +4278,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     title: const Text(
                       'Quản lý tài khoản',
                       style: TextStyle(
-                        color: Colors.white,
                         fontWeight: FontWeight.bold,
                         fontSize: 18,
                       ),
                     ),
-                    backgroundColor: Theme.of(context).colorScheme.primary,
                   ),
                   body: SafeArea(
                     child: ListView(
@@ -4236,7 +4291,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           canEdit
                               ? 'Bạn chỉ có thể chỉnh số điện thoại sau khi bấm nút Sửa số điện thoại.'
                               : 'Tài khoản Cha/Mẹ chỉ có quyền xem thông tin.',
-                          style: TextStyle(color: Colors.grey.shade700),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
                         ),
                         const SizedBox(height: 12),
                         Card(
@@ -4331,13 +4388,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
+                                  OverflowBar(
+                                    spacing: 8,
+                                    overflowSpacing: 8,
+                                    alignment: MainAxisAlignment.spaceBetween,
+                                    overflowAlignment: OverflowBarAlignment.end,
                                     children: [
                                       const Text(
                                         'Cập nhật số điện thoại',
                                         style: TextStyle(fontWeight: FontWeight.w700),
                                       ),
-                                      const Spacer(),
                                       if (!isEditingPhone)
                                         OutlinedButton.icon(
                                           onPressed: isSaving
@@ -4468,11 +4528,17 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       }
     }
 
+    await PushNotificationService.instance.unregisterCurrentUserToken();
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const CareElderScreen()),
+      MaterialPageRoute(
+        builder: (_) => CareElderScreen(
+          isDarkMode: Theme.of(context).brightness == Brightness.dark,
+          onToggleDarkMode: widget.onToggleDarkMode,
+        ),
+      ),
       (route) => false,
     );
   }
@@ -4480,18 +4546,24 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   Future<void> _openNotificationsPanel() async {
     final scope = _scope;
     if (scope != null) {
-      final snapshot = await _taskCollection(scope).get();
-      final openedUnreadIds = _buildTaskNotifications(snapshot.docs)
-          .where((item) => item.isUnread)
-          .map((item) => item.id)
-          .toSet();
+      try {
+        final snapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(scope.selfUid)
+            .collection('notifications')
+            .where('read', isEqualTo: false)
+            .get();
+        final openedUnreadIds = snapshot.docs.map((d) => d.id).toSet();
 
-      if (!mounted) return;
-      setState(() {
-        _notificationPanelSessionActive = true;
-        _notificationPanelOpenedUnreadIds = openedUnreadIds;
-        _notificationPanelTouchedIds = <String>{};
-      });
+        if (!mounted) return;
+        setState(() {
+          _notificationPanelSessionActive = true;
+          _notificationPanelOpenedUnreadIds = openedUnreadIds;
+          _notificationPanelTouchedIds = <String>{};
+        });
+      } catch (_) {
+        // ignore
+      }
     }
 
     await showModalBottomSheet<void>(
@@ -4518,7 +4590,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             valueListenable: _notificationStatusChanged,
                             builder: (context, value, child) {
                               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                                stream: _taskCollection(scope).snapshots(),
+                                stream: FirebaseFirestore.instance
+                                    .collection('users')
+                                    .doc(scope.selfUid)
+                                    .collection('notifications')
+                                    .orderBy('createdAt', descending: true)
+                                    .snapshots(),
                                 builder: (context, snapshot) {
                                   if (snapshot.connectionState ==
                                       ConnectionState.waiting) {
@@ -4527,15 +4604,21 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                     );
                                   }
 
+                                  if (snapshot.hasError) {
+                                    return const Center(
+                                      child: Text('Không thể tải thông báo.'),
+                                    );
+                                  }
+
                                   final docs = snapshot.data?.docs ?? const [];
-                                  final notifications = _buildTaskNotifications(
-                                    docs,
-                                  );
+                                  final notifications = docs
+                                      .map(_UserInboxNotification.fromDoc)
+                                      .toList(growable: false);
 
                                   if (notifications.isEmpty) {
                                     return const Center(
                                       child: Text(
-                                        'Chưa có hoạt động mới từ Cha/Mẹ.',
+                                        'Chưa có thông báo.',
                                       ),
                                     );
                                   }
@@ -4546,7 +4629,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                         const SizedBox(height: 8),
                                     itemBuilder: (context, index) {
                                       final item = notifications[index];
-                                      return _buildNotificationTile(scope, item);
+                                      return _buildInboxNotificationTile(
+                                        scope,
+                                        item,
+                                      );
                                     },
                                   );
                                 },
@@ -4566,10 +4652,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       final idsToMarkRead = _notificationPanelOpenedUnreadIds
           .difference(_notificationPanelTouchedIds);
       if (idsToMarkRead.isNotEmpty) {
-        setState(() {
-          _readNotificationIds.addAll(idsToMarkRead);
-        });
-        await _saveNotificationStates(scope);
+        try {
+          final batch = FirebaseFirestore.instance.batch();
+          final col = FirebaseFirestore.instance
+              .collection('users')
+              .doc(scope.selfUid)
+              .collection('notifications');
+          for (final id in idsToMarkRead) {
+            batch.set(col.doc(id), {
+              'read': true,
+              'readAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          }
+          await batch.commit();
+        } catch (_) {
+          // ignore
+        }
       }
     }
 
@@ -4656,15 +4754,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               ? 'Tài Khoản Con'
               : 'Tài Khoản Cha Mẹ',
           style: const TextStyle(
-            color: Colors.white,
             fontWeight: FontWeight.w800,
             fontSize: 20,
             letterSpacing: 0.3,
           ),
         ),
-        backgroundColor: Theme.of(context).colorScheme.primary,
         actions: [
-          if (widget.isChildView) _buildNotificationAction(),
+          _buildNotificationAction(),
           _buildAdminAction(),
         ],
       ),
@@ -4839,6 +4935,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               mediaDocs,
               scope.selfUid,
               _shareboxLastSeenMillis,
+              isChat: false,
             );
 
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -4849,6 +4946,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   chatDocs,
                   scope.selfUid,
                   _shareboxLastSeenMillis,
+                  isChat: true,
                 );
                 final unreadCount = unreadMediaCount + unreadChatCount;
                 final badgeText = unreadCount > 99 ? '99+' : '$unreadCount';
@@ -4858,7 +4956,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   icon: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      const Icon(Icons.photo_library),
+                      const Icon(Icons.chat_bubble_outline),
                       if (unreadCount > 0)
                         Positioned(
                           top: -8,
@@ -4892,7 +4990,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     ],
                   ),
                   label: Text(
-                    unreadCount > 0 ? 'ShareBox ($badgeText)' : 'ShareBox',
+                    unreadCount > 0 ? 'Chat ($badgeText)' : 'Chat',
                     textAlign: TextAlign.center,
                   ),
                   style: FilledButton.styleFrom(
@@ -4975,7 +5073,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
     switch (action) {
       case EmergencyActionResult.callStarted:
-        _showMessage('Đang gọi SOS trực tiếp tới $childPhone.');
+        _showMessage('Đang gọi SOS tới $childPhone.');
         break;
       case EmergencyActionResult.smsOpened:
         _showMessage(
@@ -5048,13 +5146,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               title: const Text(
                 'Thống kê công việc',
                 style: TextStyle(
-                  color: Colors.white,
                   fontWeight: FontWeight.w800,
                   fontSize: 20,
                   letterSpacing: 0.3,
                 ),
               ),
-              backgroundColor: Theme.of(context).colorScheme.primary,
             ),
             body: SafeArea(
               child: ListView(
@@ -5077,6 +5173,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     required double size,
     int badgeCount = 0,
   }) {
+    final scheme = Theme.of(context).colorScheme;
+    final surface = scheme.surfaceContainerHighest;
+    final disabledBg = Color.alphaBlend(
+      scheme.onSurface.withValues(alpha: 0.06),
+      surface,
+    );
+
     return Tooltip(
       message: tooltip,
       child: SizedBox(
@@ -5084,11 +5187,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         height: size,
         child: Material(
             color: onTap == null
-              ? Colors.grey.shade100
-              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.09),
+                ? disabledBg
+                : Color.alphaBlend(
+                    scheme.primary.withValues(alpha: 0.10),
+                    surface,
+                  ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.blueGrey.shade100),
+            side: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.75),
+            ),
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -5101,8 +5209,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     icon,
                     size: 26,
                     color: onTap == null
-                        ? Colors.grey
-                        : Theme.of(context).colorScheme.primary,
+                        ? scheme.onSurfaceVariant
+                        : scheme.primary,
                   ),
                 ),
                 if (badgeCount > 0)
@@ -5145,6 +5253,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           mediaDocs,
           scope.selfUid,
           _shareboxLastSeenMillis,
+          isChat: false,
         );
 
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -5155,13 +5264,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
               chatDocs,
               scope.selfUid,
               _shareboxLastSeenMillis,
+              isChat: true,
             );
 
             final unreadCount = unreadMediaCount + unreadChatCount;
 
             return _buildSideActionButton(
-              icon: Icons.photo_library,
-              tooltip: 'Mở ShareBox',
+              icon: Icons.chat_bubble_outline,
+              tooltip: 'Mở Chat',
               onTap: () => _openShareBoxBottomSheet(scope),
               size: size,
               badgeCount: unreadCount,
@@ -5186,20 +5296,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         builder: (context) => Scaffold(
           appBar: AppBar(
             title: const Text(
-              'ShareBox',
+              'Chat',
               style: TextStyle(
-                color: Colors.white,
                 fontWeight: FontWeight.w800,
                 fontSize: 20,
                 letterSpacing: 0.3,
               ),
             ),
-            backgroundColor: Theme.of(context).colorScheme.primary,
           ),
           body: SafeArea(
-            child: _buildChatPage(
-              scope,
-              unreadCutoffMillis: unreadCutoffMillis,
+            child: ValueListenableBuilder<int>(
+              valueListenable: _shareBoxUiVersion,
+              builder: (context, value, child) {
+                return _buildChatPage(
+                  scope,
+                  unreadCutoffMillis: unreadCutoffMillis,
+                );
+              },
             ),
           ),
         ),
@@ -5264,18 +5377,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: _shareStreamWithLimit(scope, limit: _shareLoadLimit),
               builder: (context, shareSnapshot) {
-                if (shareSnapshot.connectionState == ConnectionState.waiting &&
-                    !shareSnapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (shareSnapshot.hasError) {
-                  return const Center(child: Text('Không thể tải media.'));
-                }
+                final mediaLoading =
+                    shareSnapshot.connectionState == ConnectionState.waiting &&
+                    !shareSnapshot.hasData;
+                final Object? mediaError = shareSnapshot.hasError
+                    ? (shareSnapshot.error ?? 'unknown')
+                    : null;
 
-                final shareDocs = shareSnapshot.data?.docs ?? const [];
+                final shareDocs =
+                    shareSnapshot.hasError ? const [] : (shareSnapshot.data?.docs ?? const []);
                 final mediaEntries = shareDocs
                     .where(
-                      (doc) => !_isDeletedForUser(doc.data(), scope.selfUid),
+                      (doc) =>
+                          !_isDeletedForUser(doc.data(), scope.selfUid) &&
+                          !_isLocallyDeletedTimelineDoc(
+                            isChat: false,
+                            id: doc.id,
+                          ),
                     )
                     .map((d) => _ShareImage.fromDoc(d))
                     .toList();
@@ -5310,7 +5428,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         chatSnapshot.data?.docs
                             .where(
                               (doc) =>
-                                  !_isDeletedForUser(doc.data(), scope.selfUid),
+                                  !_isDeletedForUser(doc.data(), scope.selfUid) &&
+                                  !_isLocallyDeletedTimelineDoc(
+                                    isChat: true,
+                                    id: doc.id,
+                                  ),
                             )
                             .map((d) => _ChatMessage.fromDoc(d))
                             .toList() ??
@@ -5368,8 +5490,28 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     }
 
                     if (timelineItems.isEmpty) {
-                      return const Center(
-                        child: Text('Chưa có nội dung chat.'),
+                      return Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (mediaLoading)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                'Đang tải media...',
+                                style: TextStyle(color: Colors.black54),
+                              ),
+                            ),
+                          if (mediaError != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(
+                                'Media lỗi: $mediaError',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.redAccent),
+                              ),
+                            ),
+                          const Text('Chưa có nội dung chat.'),
+                        ],
                       );
                     }
 
@@ -5381,7 +5523,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             controller: _chatTimelineScrollController,
                             physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.only(bottom: 10),
-                            itemCount: timelineItems.length + 1,
+                            itemCount:
+                                timelineItems.length + 1 + (mediaError != null || mediaLoading ? 1 : 0),
                             separatorBuilder: (context, index) =>
                                 const SizedBox(height: 8),
                             itemBuilder: (context, index) {
@@ -5404,7 +5547,39 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 );
                               }
 
-                              final timelineIndex = index - 1;
+                              final hasMediaBanner = mediaError != null || mediaLoading;
+                              if (hasMediaBanner && index == 1) {
+                                final bannerText = mediaLoading
+                                    ? 'Đang tải media...'
+                                    : 'Không tải được media: $mediaError';
+                                final bannerColor = mediaLoading
+                                    ? Colors.blueGrey.shade50
+                                    : Colors.red.shade50;
+                                final borderColor = mediaLoading
+                                    ? Colors.blueGrey.shade200
+                                    : Colors.red.shade200;
+
+                                return Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: bannerColor,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: borderColor),
+                                  ),
+                                  child: Text(
+                                    bannerText,
+                                    style: TextStyle(
+                                      color: mediaLoading
+                                          ? Colors.black87
+                                          : Colors.red.shade700,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                );
+                              }
+
+                              final timelineIndex =
+                                  (index - 1) - (hasMediaBanner ? 1 : 0);
                               final item = timelineItems[timelineIndex];
                               final showUnreadDivider =
                                   firstUnreadIndex >= 0 &&
@@ -5416,8 +5591,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               final alignment = isMine
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft;
-                              final isRevoked = item.isRevoked;
-                              final revokedAt = item.revokedAt;
+                                final itemId = item.isChat
+                                  ? item.chat!.id
+                                  : item.media!.id;
+                                final itemKey = _timelineLocalKey(
+                                isChat: item.isChat,
+                                id: itemId,
+                                );
+                                final isOptimisticallyRevoked =
+                                  _shareboxOptimisticRevokedKeys
+                                    .contains(itemKey);
+                                final isRevoked =
+                                  item.isRevoked || isOptimisticallyRevoked;
+                                final revokedAt = item.revokedAt ??
+                                  (isOptimisticallyRevoked
+                                    ? DateTime.now()
+                                    : null);
                               final bubbleColor = isRevoked
                                   ? Colors.grey.shade200
                                   : (isMine
@@ -5522,28 +5711,30 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               final messageWidget = Align(
                                 alignment: alignment,
                                 child: isMine
-                                    ? Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.end,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          IconButton(
-                                            tooltip: 'Tùy chọn',
-                                            icon: const Icon(
-                                              Icons.more_horiz,
-                                              size: 20,
-                                            ),
-                                            onPressed: () =>
-                                                _showMyMessageActions(
-                                                  scope,
-                                                  item,
+                                    ? (isRevoked
+                                        ? bubble
+                                        : Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.end,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              IconButton(
+                                                tooltip: 'Tùy chọn',
+                                                icon: const Icon(
+                                                  Icons.more_horiz,
+                                                  size: 20,
                                                 ),
-                                          ),
-                                          bubble,
-                                        ],
-                                      )
+                                                onPressed: () =>
+                                                    _showMyMessageActions(
+                                                      scope,
+                                                      item,
+                                                    ),
+                                              ),
+                                              bubble,
+                                            ],
+                                          ))
                                     : bubble,
                               );
 
@@ -5850,11 +6041,19 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: () async {
-                    if (!await canLaunchUrl(Uri.parse(actionUrl))) return;
-                    await launchUrl(
-                      Uri.parse(actionUrl),
-                      mode: LaunchMode.externalApplication,
-                    );
+                    if (!hasLocation) return;
+
+                    if (widget.isChildView) {
+                      await _openGoogleMapsDirections(latNum, lngNum);
+                      return;
+                    }
+
+                    final uri = Uri.parse(actionUrl);
+                    if (!await canLaunchUrl(uri)) {
+                      _showMessage('Không thể mở Google Maps.');
+                      return;
+                    }
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
                   },
                   icon: Icon(actionIcon),
                   label: Text(actionLabel),
@@ -6879,7 +7078,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             stream: _shareStream(scope),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
-                return const Text('Không thể tải media ShareBox.');
+                return const Text('Không thể tải ảnh/video Chat.');
               }
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Padding(
@@ -7800,28 +7999,51 @@ class _TaskItem {
   }
 }
 
-enum _TaskNotificationType { completed, overdue }
-
-class _TaskNotification {
-  const _TaskNotification({
+class _UserInboxNotification {
+  const _UserInboxNotification({
     required this.id,
-    required this.taskId,
-    required this.title,
-    required this.note,
     required this.type,
-    required this.eventAt,
-    required this.scheduledAt,
+    required this.title,
+    required this.body,
+    required this.channelId,
+    required this.createdAt,
     required this.isUnread,
+    this.taskId,
+    this.messageId,
   });
 
   final String id;
-  final String taskId;
+  final String type; // chat | task
   final String title;
-  final String note;
-  final _TaskNotificationType type;
-  final DateTime eventAt;
-  final DateTime scheduledAt;
+  final String body;
+  final String channelId;
+  final DateTime createdAt;
   final bool isUnread;
+  final String? taskId;
+  final String? messageId;
+
+  factory _UserInboxNotification.fromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    final createdAt = data['createdAt'];
+    return _UserInboxNotification(
+      id: doc.id,
+      type: (data['type'] ?? '').toString(),
+      title: (data['title'] ?? 'Thông báo').toString(),
+      body: (data['body'] ?? '').toString(),
+      channelId: (data['channelId'] ?? '').toString(),
+      taskId: (data['taskId'] ?? '').toString().trim().isEmpty
+          ? null
+          : (data['taskId'] ?? '').toString(),
+      messageId: (data['messageId'] ?? '').toString().trim().isEmpty
+          ? null
+          : (data['messageId'] ?? '').toString(),
+      createdAt:
+          createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+      isUnread: data['read'] != true,
+    );
+  }
 }
 
 class _ShareImage {

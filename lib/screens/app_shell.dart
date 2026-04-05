@@ -195,7 +195,9 @@ class _MyAppState extends State<MyApp> {
       ),
       home: CareElderScreen(
         isDarkMode: _themeMode == ThemeMode.dark,
-        onToggleDarkMode: _setDarkModeEnabled,
+        onToggleDarkMode: (enabled) {
+          _setDarkModeEnabled(enabled);
+        },
       ),
     );
   }

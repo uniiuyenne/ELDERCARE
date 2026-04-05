@@ -28,6 +28,24 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if signedIn();
       allow create, update, delete: if isSelf(userId);
+
+      // Sync state for "Xóa ở phía tôi" (delete-for-me): private per user.
+      match /shareboxDeleted/{deletedId} {
+        allow read: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
+      }
+
+      // Push notification tokens (FCM): private per user.
+      match /fcmTokens/{tokenId} {
+        allow read: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
+      }
+
+      // In-app notification inbox synced with push notifications.
+      match /notifications/{notificationId} {
+        allow read: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
+      }
     }
 
     match /channels/{channelId} {
@@ -114,6 +132,61 @@ service cloud.firestore {
         // Deletion rules to match UX:
         // - Revoke (delete): only the sender can delete the media for everyone.
         // - Delete for me (update deletedFor): any channel member can only add their own uid.
+        allow delete: if isChannelMember(channelId)
+          && resource.data.senderUid == request.auth.uid;
+
+        allow update: if isChannelMember(channelId)
+          && (
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['deletedFor'])
+              && request.resource.data.deletedFor is list
+              && request.auth.uid in request.resource.data.deletedFor
+              && request.resource.data.deletedFor.size() >= (
+                resource.data.deletedFor is list ? resource.data.deletedFor.size() : 0
+              )
+            )
+            ||
+            (
+              resource.data.senderUid == request.auth.uid
+              && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+                'revoked',
+                'revokedAt',
+                'revokedByUid',
+                'revokedByRole',
+                'updatedAt'
+              ])
+              && request.resource.data.revoked == true
+              && request.resource.data.revokedAt == request.time
+              && request.resource.data.revokedByUid == request.auth.uid
+              && request.resource.data.revokedByRole in ['parent', 'child']
+              && request.resource.data.updatedAt == request.time
+            )
+          );
+      }
+
+      // Media ShareBox collection name used by the app.
+      match /Chat/{shareId} {
+        allow read: if isChannelMember(channelId);
+
+        allow create: if isChannelMember(channelId)
+          && request.resource.data.mediaUrl is string
+          && request.resource.data.mediaUrl.size() > 0
+          && request.resource.data.imageUrl is string
+          && request.resource.data.imageUrl.size() > 0
+          && request.resource.data.fileName is string
+          && request.resource.data.fileName.size() > 0
+          && request.resource.data.mediaType in ['image', 'video']
+          && request.resource.data.sizeBytes is int
+          && request.resource.data.sizeBytes > 0
+          && (
+            (request.resource.data.mediaType == 'image' && request.resource.data.sizeBytes <= 5 * 1024 * 1024)
+            ||
+            (request.resource.data.mediaType == 'video' && request.resource.data.sizeBytes <= 40 * 1024 * 1024)
+          )
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderRole in ['parent', 'child'];
+
+        // Revoke (delete): only the sender can delete the media for everyone.
         allow delete: if isChannelMember(channelId)
           && resource.data.senderUid == request.auth.uid;
 
