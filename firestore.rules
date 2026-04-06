@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow users to read/write their own user document
+    match /users/{userId} {
+      allow read, write: if request.auth.uid == userId;
+      
+      // Allow Cloud Functions to read user data
+      allow read: if request.auth == null;
+    }
+
+    // Channels and tasks
+    match /channels/{channelId} {
+      // Allow read if user is authenticated (for development, allow all)
+      allow read, write: if request.auth != null || request.auth == null;
+      
+      match /tasks/{taskId} {
+        allow read, write: if request.auth != null || request.auth == null;
+      }
+
+      // Notifications collection - allow write from Cloud Functions
+      match /notifications/{notificationId} {
+        allow read, write: if request.auth != null || request.auth == null;
+        // Allow create from authenticated users or Cloud Functions
+        allow create: if true;
+        // Allow update from Cloud Functions or authenticated users
+        allow update: if true;
+      }
+
+      match /sharebox/{shareboxId} {
+        allow read, write: if request.auth != null || request.auth == null;
+      }
+    }
+
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

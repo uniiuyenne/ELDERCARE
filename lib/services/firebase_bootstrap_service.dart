@@ -3,6 +3,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
 import '../firebase_options.dart';
+import 'notification_service.dart';
+import 'local_notification_service.dart';
 
 class FirebaseBootstrapService {
   const FirebaseBootstrapService._();
@@ -33,6 +35,20 @@ class FirebaseBootstrapService {
       debugPrint(
         'Firebase Auth test mode enabled (no real SMS, using test phone numbers only)',
       );
+    }
+
+    // Khởi tạo Firebase Cloud Messaging
+    try {
+      await NotificationService.initialize();
+    } catch (e) {
+      debugPrint('Error initializing NotificationService: $e');
+    }
+
+    // Khởi tạo Local Notifications
+    try {
+      await LocalNotificationService.initialize();
+    } catch (e) {
+      debugPrint('Error initializing LocalNotificationService: $e');
     }
   }
 }

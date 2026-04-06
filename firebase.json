@@ -1,0 +1,22 @@
+{
+  "projects": {
+    "default": "btapth3"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-functions-debug.log"
+      ],
+      "runtime": "nodejs18"
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

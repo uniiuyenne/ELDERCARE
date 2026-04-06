@@ -16,6 +16,8 @@ import 'package:geolocator/geolocator.dart';
 import '../services/background_location_service.dart';
 import '../services/location_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/notification_service.dart';
+import '../services/local_notification_service.dart';
 
 class CareElderScreen extends StatefulWidget {
   const CareElderScreen({super.key});
@@ -195,7 +197,7 @@ class _CareElderScreenState extends State<CareElderScreen>
         }
 
         final data = (await userDocRef.get()).data() ?? {};
-  if (!mounted || _isDisposing) return;
+        if (!mounted || _isDisposing) return;
         _serverPhone = (data['phone'] ?? '').toString().trim();
         _phoneLocked = data['phoneLocked'] == true;
         _userPhoneController.text = _serverPhone;
@@ -1330,13 +1332,13 @@ class _FamilyHomePage extends StatefulWidget {
 }
 
 class _FamilyHomePageState extends State<_FamilyHomePage> {
-    // Biến vị trí
-    Position? _currentPosition;
-    String? _currentAddress;
-    StreamSubscription<Position>? _positionStreamSub;
-    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
-      _parentLocationSub;
-    bool _updatingLocation = false;
+  // Biến vị trí
+  Position? _currentPosition;
+  String? _currentAddress;
+  StreamSubscription<Position>? _positionStreamSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _parentLocationSub;
+  bool _updatingLocation = false;
   static const int _maxImageSizeBytes = 5 * 1024 * 1024;
   static const int _maxVideoSizeBytes = 40 * 1024 * 1024;
   static const String _alwaysPermissionPromptKeyPrefix =
@@ -1375,7 +1377,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   Set<String> _readNotificationIds = <String>{};
   Set<String> _deletedNotificationIds = <String>{};
   Set<String> _stickyUnreadNotificationIds = <String>{};
-
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _notificationsSub;
   @override
   void initState() {
     super.initState();
@@ -1394,6 +1396,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _shareBoxUiVersion.dispose();
     _positionStreamSub?.cancel();
     _parentLocationSub?.cancel();
+    _notificationsSub?.cancel();
     super.dispose();
   }
 
@@ -1491,19 +1494,22 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           distanceFilter: 10,
         ),
       );
-      _positionStreamSub = locationStream.listen((pos) async {
-        if (!mounted) return;
-        setState(() => _currentPosition = pos);
-        final address = await LocationService.getAddressFromLatLng(
-          pos.latitude,
-          pos.longitude,
-        );
-        if (!mounted) return;
-        setState(() => _currentAddress = address);
-        await _updateLocationToFirestore(pos, address);
-      }, onError: (error) {
-        _showMessage('Không thể theo dõi vị trí realtime: $error');
-      });
+      _positionStreamSub = locationStream.listen(
+        (pos) async {
+          if (!mounted) return;
+          setState(() => _currentPosition = pos);
+          final address = await LocationService.getAddressFromLatLng(
+            pos.latitude,
+            pos.longitude,
+          );
+          if (!mounted) return;
+          setState(() => _currentAddress = address);
+          await _updateLocationToFirestore(pos, address);
+        },
+        onError: (error) {
+          _showMessage('Không thể theo dõi vị trí realtime: $error');
+        },
+      );
 
       // Lấy vị trí lần đầu
       final pos = await LocationService.getCurrentPosition();
@@ -1534,7 +1540,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         return;
       }
 
-      final currentRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final currentRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid);
       final currentDoc = await currentRef.get();
       if (!mounted) return;
       final data = currentDoc.data() ?? {};
@@ -1604,6 +1612,17 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         _loadingScope = false;
       });
       await _loadNotificationState(resolvedScope);
+
+      // Subscribe to task notifications for this channel
+      await NotificationService.subscribeToTopic(
+        NotificationService.getTaskNotificationTopic(resolvedScope.channelId),
+      );
+
+      // Save device token for current user
+      await NotificationService.saveDeviceToken(user.uid);
+
+      // Listen for task completion notifications
+      await _listenForTaskCompletionNotifications(resolvedScope);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1633,27 +1652,65 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .doc(parentUid)
         .snapshots()
         .listen((snap) {
-      if (!mounted) return;
-      final data = snap.data();
-      if (data != null && data['location'] != null) {
-        final loc = data['location'];
-        setState(() {
-          _currentPosition = Position(
-            latitude: (loc['lat'] ?? 0).toDouble(),
-            longitude: (loc['lng'] ?? 0).toDouble(),
-            timestamp: DateTime.now(),
-            accuracy: 0,
-            altitude: 0,
-            heading: 0,
-            speed: 0,
-            speedAccuracy: 0,
-            altitudeAccuracy: 0,
-            headingAccuracy: 0,
-          );
-          _currentAddress = loc['address']?.toString();
+          if (!mounted) return;
+          final data = snap.data();
+          if (data != null && data['location'] != null) {
+            final loc = data['location'];
+            setState(() {
+              _currentPosition = Position(
+                latitude: (loc['lat'] ?? 0).toDouble(),
+                longitude: (loc['lng'] ?? 0).toDouble(),
+                timestamp: DateTime.now(),
+                accuracy: 0,
+                altitude: 0,
+                heading: 0,
+                speed: 0,
+                speedAccuracy: 0,
+                altitudeAccuracy: 0,
+                headingAccuracy: 0,
+              );
+              _currentAddress = loc['address']?.toString();
+            });
+          }
         });
-      }
-    });
+  }
+
+  Future<void> _listenForTaskCompletionNotifications(_FamilyScope scope) async {
+    _notificationsSub?.cancel();
+    _notificationsSub = FirebaseFirestore.instance
+        .collection('channels')
+        .doc(scope.channelId)
+        .collection('notifications')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) return;
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final type = (data['type'] ?? '').toString();
+            final taskTitle = (data['taskTitle'] ?? '').toString();
+            final recipientUid = (data['recipientUid'] ?? '').toString();
+            final currentUserUid = FirebaseAuth.instance.currentUser?.uid;
+
+            // Chỉ hiển thị notification cho người con
+            if (type == 'task_completed' &&
+                recipientUid == currentUserUid &&
+                scope.selfRole == 'child') {
+              // Hiển thị local notification
+              final completedBy = (data['completedBy'] ?? 'Cha/Mẹ').toString();
+              LocalNotificationService.showTaskCompletionNotification(
+                taskTitle: taskTitle,
+                completedBy: completedBy,
+              );
+
+              if (kDebugMode) {
+                debugPrint(
+                  'Task completion notification displayed: $taskTitle',
+                );
+              }
+            }
+          }
+        });
   }
 
   Future<void> _updateLocationToFirestore(Position pos, String address) async {
@@ -1938,10 +1995,52 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         'updatedByUid': scope.selfUid,
         'updatedByRole': scope.selfRole,
       }, SetOptions(merge: true));
+
+      // Gửi thông báo nếu cha/mẹ đánh dấu hoàn thành
+      if (completed && scope.selfRole == 'parent') {
+        await _sendTaskCompletionNotification(scope, task);
+      }
     } on FirebaseException catch (e) {
       _showMessage('Không thể cập nhật trạng thái: ${e.message ?? e.code}');
     } catch (e) {
       _showMessage('Không thể cập nhật trạng thái: $e');
+    }
+  }
+
+  Future<void> _sendTaskCompletionNotification(
+    _FamilyScope scope,
+    _TaskItem task,
+  ) async {
+    try {
+      // Lưu event vào Firestore để client nhận được qua listener
+      await FirebaseFirestore.instance
+          .collection('channels')
+          .doc(scope.channelId)
+          .collection('notifications')
+          .add({
+            'type': 'task_completed',
+            'taskId': task.id,
+            'taskTitle': task.title,
+            'completedBy': scope.selfRole, // 'parent'
+            'completedByUid': scope.selfUid,
+            'recipientUid': scope.partnerUid, // người con
+            'createdAt': FieldValue.serverTimestamp(),
+            'read': false,
+          });
+
+      // Gửi push notification
+      await NotificationService.sendTaskCompletionNotification(
+        childUid: scope.partnerUid,
+        taskTitle: task.title,
+        channelId: scope.channelId,
+      );
+
+      if (kDebugMode) {
+        debugPrint('Task completion notification sent for task: ${task.title}');
+      }
+    } catch (e) {
+      debugPrint('Error sending task completion notification: $e');
+      // Không hiển thị thông báo lỗi cho người dùng vì đây là phụ
     }
   }
 
@@ -2012,7 +2111,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ],
       );
     } on PlatformException catch (e) {
-      _showMessage('Không thể chọn ảnh trên thiết bị này: ${e.message ?? e.code}');
+      _showMessage(
+        'Không thể chọn ảnh trên thiết bị này: ${e.message ?? e.code}',
+      );
     } catch (e) {
       _showMessage('Không thể xử lý ảnh đã chọn: $e');
     }
@@ -2034,7 +2135,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           ? fileName.split('.').last.toLowerCase()
           : '';
       if (!_allowedVideoExtensions.contains(extension)) {
-        _showMessage('Video không hợp lệ. Chỉ hỗ trợ MP4, MOV, M4V, WEBM, 3GP.');
+        _showMessage(
+          'Video không hợp lệ. Chỉ hỗ trợ MP4, MOV, M4V, WEBM, 3GP.',
+        );
         return;
       }
 
@@ -2075,7 +2178,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ],
       );
     } on PlatformException catch (e) {
-      _showMessage('Không thể chọn video trên thiết bị này: ${e.message ?? e.code}');
+      _showMessage(
+        'Không thể chọn video trên thiết bị này: ${e.message ?? e.code}',
+      );
     } catch (e) {
       _showMessage('Không thể xử lý video đã chọn: $e');
     }
@@ -2107,9 +2212,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       color: Colors.black12,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Center(
-                      child: Icon(Icons.videocam, size: 56),
-                    ),
+                    child: const Center(child: Icon(Icons.videocam, size: 56)),
                   )
                 else
                   ClipRRect(
@@ -2212,7 +2315,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       }
 
       if (validUploads.isEmpty) {
-        _showMessage('Không có ảnh hợp lệ để gửi (định dạng hoặc dung lượng > 5MB).');
+        _showMessage(
+          'Không có ảnh hợp lệ để gửi (định dạng hoặc dung lượng > 5MB).',
+        );
         return;
       }
 
@@ -2226,7 +2331,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       }
 
       for (var i = 0; i < validUploads.length; i++) {
-        validUploads[i] = validUploads[i].copyWith(caption: batchCaption.trim());
+        validUploads[i] = validUploads[i].copyWith(
+          caption: batchCaption.trim(),
+        );
       }
 
       await _uploadSelectedImages(scope, uploads: validUploads);
@@ -2243,7 +2350,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }) async {
     if (uploads.isEmpty) return;
 
-    final totalBytes = uploads.fold<int>(0, (acc, item) => acc + item.sizeBytes);
+    final totalBytes = uploads.fold<int>(
+      0,
+      (acc, item) => acc + item.sizeBytes,
+    );
     var uploadedBytes = 0;
     var successCount = 0;
 
@@ -2299,8 +2409,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     .clamp(0.0, 1.0);
 
             final now = DateTime.now();
-            final msSinceLast =
-                now.difference(_lastProgressPaintAt).inMilliseconds;
+            final msSinceLast = now
+                .difference(_lastProgressPaintAt)
+                .inMilliseconds;
             final isSignificantJump =
                 (overallProgress - _lastPaintedOverallProgress).abs() > 0.02 ||
                 (currentProgress - _lastPaintedCurrentProgress).abs() > 0.02 ||
@@ -2369,7 +2480,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         });
         _notifyShareBoxUi();
       }
-      _showMessage('Đã chia sẻ $successCount/${uploads.length} media thành công.');
+      _showMessage(
+        'Đã chia sẻ $successCount/${uploads.length} media thành công.',
+      );
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         _showMessage(
@@ -2487,10 +2600,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return result;
   }
 
-  Future<void> _deleteSharedMedia(
-    _FamilyScope scope,
-    _ShareImage image,
-  ) async {
+  Future<void> _deleteSharedMedia(_FamilyScope scope, _ShareImage image) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -2641,12 +2751,17 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     children: [
                       const Text(
                         'Thông báo',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       Expanded(
                         child: widget.isChildView && scope != null
-                            ? StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                            ? StreamBuilder<
+                                QuerySnapshot<Map<String, dynamic>>
+                              >(
                                 stream: _taskCollection(scope).snapshots(),
                                 builder: (context, snapshot) {
                                   if (snapshot.connectionState ==
@@ -2660,14 +2775,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                   final notifications =
                                       _buildNotificationsFromTaskDocs(docs)
                                           .where(
-                                            (item) =>
-                                                !_deletedNotificationIds.contains(item.id),
+                                            (item) => !_deletedNotificationIds
+                                                .contains(item.id),
                                           )
                                           .toList();
 
                                   if (notifications.isEmpty) {
                                     return const Center(
-                                      child: Text('Chưa có hoạt động mới từ Cha/Mẹ.'),
+                                      child: Text(
+                                        'Chưa có hoạt động mới từ Cha/Mẹ.',
+                                      ),
                                     );
                                   }
 
@@ -2677,27 +2794,37 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                         const SizedBox(height: 8),
                                     itemBuilder: (context, index) {
                                       final item = notifications[index];
-                                      final relative = _formatRelativeTime(item.eventAt);
-                                      final exact = _formatExactDateTime(item.eventAt);
-                                      final isRead =
-                                          _readNotificationIds.contains(item.id);
+                                      final relative = _formatRelativeTime(
+                                        item.eventAt,
+                                      );
+                                      final exact = _formatExactDateTime(
+                                        item.eventAt,
+                                      );
+                                      final isRead = _readNotificationIds
+                                          .contains(item.id);
 
                                       return Container(
                                         decoration: BoxDecoration(
                                           color: isRead
                                               ? Colors.transparent
                                               : Colors.yellow.shade100,
-                                          borderRadius: BorderRadius.circular(10),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
                                         ),
                                         child: ListTile(
                                           onTap: () async {
-                                            await _markNotificationRead(scope, item.id);
+                                            await _markNotificationRead(
+                                              scope,
+                                              item.id,
+                                            );
                                             if (!mounted) return;
                                             setModalState(() {});
                                           },
-                                          contentPadding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                          ),
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                              ),
                                           leading: Icon(
                                             item.isCompleted
                                                 ? Icons.notifications_active
@@ -2735,7 +2862,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                             itemBuilder: (_) => const [
                                               PopupMenuItem(
                                                 value: 'mark_unread',
-                                                child: Text('Đánh dấu chưa đọc'),
+                                                child: Text(
+                                                  'Đánh dấu chưa đọc',
+                                                ),
                                               ),
                                               PopupMenuItem(
                                                 value: 'delete',
@@ -2785,13 +2914,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Future<void> _loadNotificationState(_FamilyScope scope) async {
     final prefs = await SharedPreferences.getInstance();
-    final read = prefs.getStringList(_notificationReadPrefsKey(scope)) ??
+    final read =
+        prefs.getStringList(_notificationReadPrefsKey(scope)) ??
         const <String>[];
-    final deleted = prefs.getStringList(_notificationDeletedPrefsKey(scope)) ??
+    final deleted =
+        prefs.getStringList(_notificationDeletedPrefsKey(scope)) ??
         const <String>[];
     final stickyUnread =
         prefs.getStringList(_notificationStickyUnreadPrefsKey(scope)) ??
-            const <String>[];
+        const <String>[];
     if (!mounted) return;
     setState(() {
       _readNotificationIds = read.toSet();
@@ -2854,7 +2985,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       ..._readNotificationIds,
       ...incomingIds.difference(blockedIds),
     };
-    final nextStickyUnreadIds = _stickyUnreadNotificationIds.difference(blockedIds);
+    final nextStickyUnreadIds = _stickyUnreadNotificationIds.difference(
+      blockedIds,
+    );
     if (setEquals(mergedReadIds, _readNotificationIds) &&
         setEquals(nextStickyUnreadIds, _stickyUnreadNotificationIds)) {
       return;
@@ -3121,7 +3254,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Vị trí hiện tại', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            const Text(
+              'Vị trí hiện tại',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
             const SizedBox(height: 12),
             if (_currentPosition != null)
               Column(
@@ -3138,11 +3274,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Địa chỉ chi tiết:', style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Địa chỉ chi tiết:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                         const SizedBox(height: 6),
                         Text(
-                          _currentAddress ?? '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.5),
+                          _currentAddress ??
+                              '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            height: 1.5,
+                          ),
                         ),
                       ],
                     ),
@@ -3157,7 +3305,13 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             else
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: SizedBox(height: 40, width: 40, child: CircularProgressIndicator())),
+                child: Center(
+                  child: SizedBox(
+                    height: 40,
+                    width: 40,
+                    child: CircularProgressIndicator(),
+                  ),
+                ),
               ),
           ],
         ),
@@ -3208,10 +3362,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                   child: FilledButton.icon(
                     onPressed: () => _openShareBoxBottomSheet(scope),
                     icon: const Icon(Icons.photo_library),
-                    label: const Text(
-                      'ShareBox',
-                      textAlign: TextAlign.center,
-                    ),
+                    label: const Text('ShareBox', textAlign: TextAlign.center),
                     style: FilledButton.styleFrom(
                       backgroundColor: Colors.blueAccent,
                       foregroundColor: Colors.white,
@@ -3243,7 +3394,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Gọi khẩn cấp'),
-        content: const Text('Bạn có muốn thực hiện cuộc gọi khẩn cấp 115 không?'),
+        content: const Text(
+          'Bạn có muốn thực hiện cuộc gọi khẩn cấp 115 không?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -3453,10 +3606,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
           );
         }
 
-        return Card(
-          margin: EdgeInsets.zero,
-          child: tile,
-        );
+        return Card(margin: EdgeInsets.zero, child: tile);
       },
     );
   }
@@ -3693,118 +3843,113 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   Widget _buildShareBoxCard(_FamilyScope scope, {bool fullScreen = false}) {
     const listHeight = 260.0;
     final content = Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'ShareBox',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Cha/Mẹ và Con có thể gửi ảnh/video qua Cloudinary. Metadata vẫn đồng bộ realtime trên Firestore.',
-            ),
-            const SizedBox(height: 10),
-            _buildShareBoxUploadPanel(scope),
-            const SizedBox(height: 12),
-            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _shareStream(scope),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'ShareBox',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Cha/Mẹ và Con có thể gửi ảnh/video qua Cloudinary. Metadata vẫn đồng bộ realtime trên Firestore.',
+          ),
+          const SizedBox(height: 10),
+          _buildShareBoxUploadPanel(scope),
+          const SizedBox(height: 12),
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _shareStream(scope),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
 
-                final images =
-                    snapshot.data?.docs
-                        .map((d) => _ShareImage.fromDoc(d))
-                        .toList() ??
-                    [];
-                if (images.isEmpty) {
-                  return const Text('Chưa có media nào trong ShareBox.');
-                }
+              final images =
+                  snapshot.data?.docs
+                      .map((d) => _ShareImage.fromDoc(d))
+                      .toList() ??
+                  [];
+              if (images.isEmpty) {
+                return const Text('Chưa có media nào trong ShareBox.');
+              }
 
-                final mediaList = ListView.separated(
-                  shrinkWrap: fullScreen,
-                  physics: fullScreen
-                      ? const NeverScrollableScrollPhysics()
-                      : null,
-                  itemCount: images.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final image = images[index];
-                    return Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.blueGrey.shade100),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: ListTile(
-                        onTap: () => _openImagePreview(image),
-                        leading: image.isVideo
-                            ? Container(
+              final mediaList = ListView.separated(
+                shrinkWrap: fullScreen,
+                physics: fullScreen
+                    ? const NeverScrollableScrollPhysics()
+                    : null,
+                itemCount: images.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final image = images[index];
+                  return Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.blueGrey.shade100),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: ListTile(
+                      onTap: () => _openImagePreview(image),
+                      leading: image.isVideo
+                          ? Container(
+                              width: 54,
+                              height: 54,
+                              decoration: BoxDecoration(
+                                color: Colors.black12,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Icon(Icons.videocam),
+                            )
+                          : ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                image.imageUrl,
                                 width: 54,
                                 height: 54,
-                                decoration: BoxDecoration(
-                                  color: Colors.black12,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(Icons.videocam),
-                              )
-                            : ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  image.imageUrl,
-                                  width: 54,
-                                  height: 54,
-                                  cacheWidth: 108,
-                                  cacheHeight: 108,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const Icon(Icons.broken_image),
-                                ),
+                                cacheWidth: 108,
+                                cacheHeight: 108,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    const Icon(Icons.broken_image),
                               ),
-                        title: Text(
-                          image.fileName,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Xóa media',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _deleteSharedMedia(scope, image),
-                        ),
-                        subtitle: Text(
-                          'Từ: ${image.senderRole == 'parent' ? 'Cha/Mẹ' : 'Con'}\n'
-                          'Loại: ${image.isVideo ? 'Video' : 'Ảnh'}\n'
-                          '${image.caption.trim().isEmpty ? '' : 'Mô tả: ${image.caption.trim()}\n'}'
-                          'Lúc: ${_formatDateTime(image.createdAt)}',
-                        ),
+                            ),
+                      title: Text(
+                        image.fileName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    );
-                  },
-                );
+                      trailing: IconButton(
+                        tooltip: 'Xóa media',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => _deleteSharedMedia(scope, image),
+                      ),
+                      subtitle: Text(
+                        'Từ: ${image.senderRole == 'parent' ? 'Cha/Mẹ' : 'Con'}\n'
+                        'Loại: ${image.isVideo ? 'Video' : 'Ảnh'}\n'
+                        '${image.caption.trim().isEmpty ? '' : 'Mô tả: ${image.caption.trim()}\n'}'
+                        'Lúc: ${_formatDateTime(image.createdAt)}',
+                      ),
+                    ),
+                  );
+                },
+              );
 
-                if (fullScreen) {
-                  return mediaList;
-                }
+              if (fullScreen) {
+                return mediaList;
+              }
 
-                return SizedBox(
-                  height: listHeight,
-                  child: mediaList,
-                );
-              },
-            ),
-          ],
-        ),
+              return SizedBox(height: listHeight, child: mediaList);
+            },
+          ),
+        ],
+      ),
     );
 
     if (fullScreen) {
-      return SingleChildScrollView(
-        child: content,
-      );
+      return SingleChildScrollView(child: content);
     }
 
     return Card(child: content);
@@ -3954,7 +4099,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                 ? null
                 : Checkbox(
                     value: task.completed,
-                onChanged: canToggleCompletion
+                    onChanged: canToggleCompletion
                         ? (value) => _toggleTask(scope, task, value ?? false)
                         : null,
                   ),
@@ -4140,9 +4285,7 @@ class _PendingShareUpload {
   final Uint8List bytes;
   final _ShareMediaType mediaType;
 
-  _PendingShareUpload copyWith({
-    String? caption,
-  }) {
+  _PendingShareUpload copyWith({String? caption}) {
     return _PendingShareUpload(
       file: file,
       fileName: fileName,
@@ -4258,4 +4401,3 @@ class _NotificationItem {
   final DateTime eventAt;
   final bool isCompleted;
 }
-
