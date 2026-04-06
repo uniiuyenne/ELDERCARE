@@ -31,7 +31,6 @@ class CareElderScreen extends StatefulWidget {
   final bool isDarkMode;
   final ValueChanged<bool>? onToggleDarkMode;
 
-
   @override
   State<CareElderScreen> createState() => _CareElderScreenState();
 }
@@ -348,16 +347,15 @@ class _CareElderScreenState extends State<CareElderScreen>
       }
 
       final route = MaterialPageRoute(
-        builder: (_) =>
-            role == 'child'
-                ? ChildHomePage(
-                    isDarkMode: widget.isDarkMode,
-                    onToggleDarkMode: widget.onToggleDarkMode,
-                  )
-                : ParentHomePage(
-                    isDarkMode: widget.isDarkMode,
-                    onToggleDarkMode: widget.onToggleDarkMode,
-                  ),
+        builder: (_) => role == 'child'
+            ? ChildHomePage(
+                isDarkMode: widget.isDarkMode,
+                onToggleDarkMode: widget.onToggleDarkMode,
+              )
+            : ParentHomePage(
+                isDarkMode: widget.isDarkMode,
+                onToggleDarkMode: widget.onToggleDarkMode,
+              ),
       );
       FocusManager.instance.primaryFocus?.unfocus();
       await Navigator.of(context).pushReplacement(route);
@@ -561,11 +559,7 @@ class _CareElderScreenState extends State<CareElderScreen>
                     backgroundColor: _surfaceColor,
                     foregroundColor: _surfaceTextColor,
                   ),
-                  icon: Icon(
-                    Icons.login,
-                    size: 28,
-                    color: Colors.redAccent,
-                  ),
+                  icon: Icon(Icons.login, size: 28, color: Colors.redAccent),
                   label: _isLoading
                       ? const SizedBox(
                           height: 24,
@@ -602,11 +596,7 @@ class _CareElderScreenState extends State<CareElderScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
-                  Icons.phone_android,
-                  size: 64,
-                  color: Colors.amber,
-                ),
+                const Icon(Icons.phone_android, size: 64, color: Colors.amber),
                 const SizedBox(height: 16),
                 Text(
                   'Nhập Số Điện Thoại',
@@ -680,7 +670,11 @@ class _CareElderScreenState extends State<CareElderScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.check_circle, size: 64, color: Colors.green.shade600),
+                  Icon(
+                    Icons.check_circle,
+                    size: 64,
+                    color: Colors.green.shade600,
+                  ),
                   const SizedBox(height: 16),
                   Text(
                     isLinked
@@ -1247,6 +1241,8 @@ class _CareElderScreenState extends State<CareElderScreen>
   }
 
   Future<void> _signOut({bool requireConfirm = true}) async {
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+
     if (requireConfirm && mounted) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -1269,11 +1265,16 @@ class _CareElderScreenState extends State<CareElderScreen>
       if (confirmed != true) return;
     }
 
+    if (!mounted) return;
+
     // Unregister this device token while still authenticated.
     // This prevents notifications leaking when switching accounts on the same device.
     await PushNotificationService.instance.unregisterCurrentUserToken();
     await FirebaseAuth.instance.signOut();
+
+    if (!mounted) return;
     await _clearCachedProfile();
+    if (!mounted) return;
     _emailController.clear();
     _passwordController.clear();
     _userPhoneController.clear();
@@ -1283,6 +1284,9 @@ class _CareElderScreenState extends State<CareElderScreen>
     setState(() => _step = 0);
     _animationController.reset();
     _animationController.forward();
+
+    FocusManager.instance.primaryFocus?.unfocus();
+    rootNavigator.popUntil((route) => route.isFirst);
   }
 
   void _showMessage(String message) {
@@ -1475,7 +1479,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   bool _notificationPanelSessionActive = false;
   Set<String> _notificationPanelOpenedUnreadIds = <String>{};
   Set<String> _notificationPanelTouchedIds = <String>{};
-  late final ValueNotifier<int> _notificationStatusChanged = ValueNotifier<int>(0);
+  late final ValueNotifier<int> _notificationStatusChanged = ValueNotifier<int>(
+    0,
+  );
 
   Widget _buildNotificationAction() {
     final scope = _scope;
@@ -1618,7 +1624,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     }
   }
 
-  bool _isLocallyDeletedTimelineDoc({required bool isChat, required String id}) {
+  bool _isLocallyDeletedTimelineDoc({
+    required bool isChat,
+    required String id,
+  }) {
     return _shareboxLocalDeletedKeys.contains(
       _timelineLocalKey(isChat: isChat, id: id),
     );
@@ -1626,7 +1635,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Future<void> _loadShareBoxLocalDeletedState(_FamilyScope scope) async {
     final prefs = await SharedPreferences.getInstance();
-    final keys = prefs.getStringList(_shareboxLocalDeletedKey(scope)) ?? const [];
+    final keys =
+        prefs.getStringList(_shareboxLocalDeletedKey(scope)) ?? const [];
     if (!mounted) return;
     setState(() {
       _shareboxLocalDeletedKeys
@@ -1657,31 +1667,34 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     _shareboxDeletedSub = _shareboxDeletedCollection(scope)
         .where('channelId', isEqualTo: scope.channelId)
         .snapshots()
-        .listen((snapshot) async {
-      final syncedKeys = <String>{};
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final kind = (data['kind'] ?? '').toString();
-        final targetId = (data['targetId'] ?? '').toString();
-        if (targetId.isEmpty) continue;
-        if (kind == 'chat') {
-          syncedKeys.add(_timelineLocalKey(isChat: true, id: targetId));
-        } else if (kind == 'media') {
-          syncedKeys.add(_timelineLocalKey(isChat: false, id: targetId));
-        }
-      }
+        .listen(
+          (snapshot) async {
+            final syncedKeys = <String>{};
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              final kind = (data['kind'] ?? '').toString();
+              final targetId = (data['targetId'] ?? '').toString();
+              if (targetId.isEmpty) continue;
+              if (kind == 'chat') {
+                syncedKeys.add(_timelineLocalKey(isChat: true, id: targetId));
+              } else if (kind == 'media') {
+                syncedKeys.add(_timelineLocalKey(isChat: false, id: targetId));
+              }
+            }
 
-      if (!mounted) return;
-      setState(() {
-        _shareboxLocalDeletedKeys.addAll(syncedKeys);
-      });
-      await _persistShareBoxLocalDeletedState(scope);
-      _notifyShareBoxUi();
-    }, onError: (Object error) {
-      // Permission/network errors here should not crash the app.
-      // Local-only hide still works even without sync.
-      debugPrint('shareboxDeleted listener failed: $error');
-    });
+            if (!mounted) return;
+            setState(() {
+              _shareboxLocalDeletedKeys.addAll(syncedKeys);
+            });
+            await _persistShareBoxLocalDeletedState(scope);
+            _notifyShareBoxUi();
+          },
+          onError: (Object error) {
+            // Permission/network errors here should not crash the app.
+            // Local-only hide still works even without sync.
+            debugPrint('shareboxDeleted listener failed: $error');
+          },
+        );
   }
 
   bool _isUnreadShareBoxItem(
@@ -1816,8 +1829,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
     if (item.type == 'task' && (item.taskId ?? '').isNotEmpty) {
       try {
-        final taskDoc =
-            await _taskCollection(scope).doc(item.taskId!).get();
+        final taskDoc = await _taskCollection(scope).doc(item.taskId!).get();
         if (!mounted) return;
 
         if (!taskDoc.exists) {
@@ -1895,10 +1907,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-        leading: Icon(
-          icon,
-          color: Theme.of(context).colorScheme.primary,
-        ),
+        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
         title: Text(
           item.title,
           style: TextStyle(
@@ -1908,9 +1917,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ),
         subtitle: Text(
           '${item.body}\n$relative\n$exact',
-          style: TextStyle(
-            color: scheme.onSurfaceVariant,
-          ),
+          style: TextStyle(color: scheme.onSurfaceVariant),
           maxLines: 4,
           overflow: TextOverflow.ellipsis,
         ),
@@ -2079,14 +2086,18 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
 
     if (kIsWeb) {
-      final ok = await launchUrl(fallback, mode: LaunchMode.externalApplication);
+      final ok = await launchUrl(
+        fallback,
+        mode: LaunchMode.externalApplication,
+      );
       if (!ok) _showMessage('Không thể mở Google Maps.');
       return;
     }
 
     final androidUri = Uri.parse('google.navigation:q=$lat,$lng&mode=d');
-    final iosUri =
-        Uri.parse('comgooglemaps://?daddr=$lat,$lng&directionsmode=driving');
+    final iosUri = Uri.parse(
+      'comgooglemaps://?daddr=$lat,$lng&directionsmode=driving',
+    );
 
     final Uri primary = switch (defaultTargetPlatform) {
       TargetPlatform.android => androidUri,
@@ -2094,12 +2105,16 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       _ => fallback,
     };
 
-    final okPrimary =
-        await launchUrl(primary, mode: LaunchMode.externalApplication);
+    final okPrimary = await launchUrl(
+      primary,
+      mode: LaunchMode.externalApplication,
+    );
     if (okPrimary) return;
 
-    final okFallback =
-        await launchUrl(fallback, mode: LaunchMode.externalApplication);
+    final okFallback = await launchUrl(
+      fallback,
+      mode: LaunchMode.externalApplication,
+    );
     if (!okFallback) _showMessage('Không thể mở Google Maps.');
   }
 
@@ -2339,31 +2354,34 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         .collection('users')
         .doc(parentUid)
         .snapshots()
-        .listen((snap) {
-          if (!mounted) return;
-          final data = snap.data();
-          if (data != null && data['location'] != null) {
-            final loc = data['location'];
-            setState(() {
-              _currentPosition = Position(
-                latitude: (loc['lat'] ?? 0).toDouble(),
-                longitude: (loc['lng'] ?? 0).toDouble(),
-                timestamp: DateTime.now(),
-                accuracy: 0,
-                altitude: 0,
-                heading: 0,
-                speed: 0,
-                speedAccuracy: 0,
-                altitudeAccuracy: 0,
-                headingAccuracy: 0,
-              );
-              _currentAddress = loc['address']?.toString();
-            });
-          }
-        }, onError: (Object error) {
-          // Permission/network errors during sign-out should not crash the app.
-          debugPrint('parent location listener failed: $error');
-        });
+        .listen(
+          (snap) {
+            if (!mounted) return;
+            final data = snap.data();
+            if (data != null && data['location'] != null) {
+              final loc = data['location'];
+              setState(() {
+                _currentPosition = Position(
+                  latitude: (loc['lat'] ?? 0).toDouble(),
+                  longitude: (loc['lng'] ?? 0).toDouble(),
+                  timestamp: DateTime.now(),
+                  accuracy: 0,
+                  altitude: 0,
+                  heading: 0,
+                  speed: 0,
+                  speedAccuracy: 0,
+                  altitudeAccuracy: 0,
+                  headingAccuracy: 0,
+                );
+                _currentAddress = loc['address']?.toString();
+              });
+            }
+          },
+          onError: (Object error) {
+            // Permission/network errors during sign-out should not crash the app.
+            debugPrint('parent location listener failed: $error');
+          },
+        );
   }
 
   Future<void> _loadFamilyScope() async {
@@ -3413,23 +3431,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       return;
     }
 
-     // Kiểm tra quyền cho parent: không cho phép mark/unmark tasks sau deadline
-     if (scope.selfRole == 'parent') {
-       final now = DateTime.now();
-       final isTaskPastDeadline = task.scheduledAt.isBefore(now);
+    // Kiểm tra quyền cho parent: không cho phép mark/unmark tasks sau deadline
+    if (scope.selfRole == 'parent') {
+      final now = DateTime.now();
+      final isTaskPastDeadline = task.scheduledAt.isBefore(now);
 
-       // Không cho phép mark hoàn thành task đã quá hạn
-       if (completed && isTaskPastDeadline && !task.completed) {
-         _showMessage('Không thể hoàn thành công việc đã quá hạn.');
-         return;
-       }
+      // Không cho phép mark hoàn thành task đã quá hạn
+      if (completed && isTaskPastDeadline && !task.completed) {
+        _showMessage('Không thể hoàn thành công việc đã quá hạn.');
+        return;
+      }
 
-       // Không cho phép bỏ check hoàn thành cho task đã quá hạn
-       if (!completed && task.completed && isTaskPastDeadline) {
-         _showMessage('Không thể bỏ hoàn thành công việc đã quá hạn.');
-         return;
-       }
-     }
+      // Không cho phép bỏ check hoàn thành cho task đã quá hạn
+      if (!completed && task.completed && isTaskPastDeadline) {
+        _showMessage('Không thể bỏ hoàn thành công việc đã quá hạn.');
+        return;
+      }
+    }
 
     try {
       await _taskCollection(scope).doc(task.id).set({
@@ -4192,7 +4210,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final canEdit = scope.selfRole == 'child';
 
     final selfName =
-        (selfData['name'] ?? FirebaseAuth.instance.currentUser?.displayName ?? '')
+        (selfData['name'] ??
+                FirebaseAuth.instance.currentUser?.displayName ??
+                '')
             .toString();
     final selfEmail =
         (selfData['email'] ?? FirebaseAuth.instance.currentUser?.email ?? '')
@@ -4201,18 +4221,15 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     final linkedName = (linkedData['name'] ?? '').toString();
 
     var selfPhoneValue = (selfData['phone'] ?? '').toString().trim();
-    var linkedPhoneValue = (canEdit
-        ? (selfData['parentPhone'] ?? linkedData['phone'] ?? '')
-        : (linkedData['phone'] ?? ''))
-      .toString()
-      .trim();
+    var linkedPhoneValue =
+        (canEdit
+                ? (selfData['parentPhone'] ?? linkedData['phone'] ?? '')
+                : (linkedData['phone'] ?? ''))
+            .toString()
+            .trim();
 
-    final selfPhoneController = TextEditingController(
-      text: selfPhoneValue,
-    );
-    final linkedPhoneController = TextEditingController(
-      text: linkedPhoneValue,
-    );
+    final selfPhoneController = TextEditingController(text: selfPhoneValue);
+    final linkedPhoneController = TextEditingController(text: linkedPhoneValue);
 
     var isSaving = false;
     var isEditingPhone = false;
@@ -4233,7 +4250,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     _showMessage('Vui lòng nhập đủ số điện thoại.');
                     return;
                   }
-                  if (!selfPhone.startsWith('+') || !linkedPhone.startsWith('+')) {
+                  if (!selfPhone.startsWith('+') ||
+                      !linkedPhone.startsWith('+')) {
                     _showMessage('Nhập số điện thoại theo định dạng +84...');
                     return;
                   }
@@ -4292,7 +4310,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               ? 'Bạn chỉ có thể chỉnh số điện thoại sau khi bấm nút Sửa số điện thoại.'
                               : 'Tài khoản Cha/Mẹ chỉ có quyền xem thông tin.',
                           style: TextStyle(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -4310,7 +4330,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 const SizedBox(height: 10),
                                 _buildAccountInfoRow(
                                   label: 'Vai trò',
-                                  value: scope.selfRole == 'child' ? 'Con' : 'Cha/Mẹ',
+                                  value: scope.selfRole == 'child'
+                                      ? 'Con'
+                                      : 'Cha/Mẹ',
                                   icon: Icons.person,
                                 ),
                                 _buildAccountInfoRow(
@@ -4352,7 +4374,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 const SizedBox(height: 10),
                                 _buildAccountInfoRow(
                                   label: 'Vai trò',
-                                  value: scope.partnerRole == 'child' ? 'Con' : 'Cha/Mẹ',
+                                  value: scope.partnerRole == 'child'
+                                      ? 'Con'
+                                      : 'Cha/Mẹ',
                                   icon: Icons.link,
                                 ),
                                 _buildAccountInfoRow(
@@ -4396,7 +4420,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                     children: [
                                       const Text(
                                         'Cập nhật số điện thoại',
-                                        style: TextStyle(fontWeight: FontWeight.w700),
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
                                       ),
                                       if (!isEditingPhone)
                                         OutlinedButton.icon(
@@ -4412,7 +4438,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                                   });
                                                 },
                                           icon: const Icon(Icons.edit_outlined),
-                                          label: const Text('Sửa số điện thoại'),
+                                          label: const Text(
+                                            'Sửa số điện thoại',
+                                          ),
                                         ),
                                     ],
                                   ),
@@ -4423,7 +4451,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                       enabled: !isSaving,
                                       keyboardType: TextInputType.phone,
                                       decoration: const InputDecoration(
-                                        labelText: 'Số điện thoại tài khoản Con',
+                                        labelText:
+                                            'Số điện thoại tài khoản Con',
                                         hintText: '+84...',
                                         border: OutlineInputBorder(),
                                         isDense: true,
@@ -4435,7 +4464,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                       enabled: !isSaving,
                                       keyboardType: TextInputType.phone,
                                       decoration: const InputDecoration(
-                                        labelText: 'Số điện thoại tài khoản liên kết',
+                                        labelText:
+                                            'Số điện thoại tài khoản liên kết',
                                         hintText: '+84...',
                                         border: OutlineInputBorder(),
                                         isDense: true,
@@ -4456,18 +4486,23 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                         ),
                                         const Spacer(),
                                         ElevatedButton.icon(
-                                          onPressed: isSaving ? null : saveChanges,
+                                          onPressed: isSaving
+                                              ? null
+                                              : saveChanges,
                                           icon: isSaving
                                               ? const SizedBox(
                                                   width: 16,
                                                   height: 16,
-                                                  child: CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                  ),
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
                                                 )
                                               : const Icon(Icons.save_outlined),
                                           label: Text(
-                                            isSaving ? 'Đang lưu...' : 'Lưu thay đổi',
+                                            isSaving
+                                                ? 'Đang lưu...'
+                                                : 'Lưu thay đổi',
                                           ),
                                         ),
                                       ],
@@ -4494,6 +4529,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
   }
 
   Future<void> _signOutAndBackToLogin({bool requireConfirm = true}) async {
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+
     if (requireConfirm && mounted) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -4516,6 +4553,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       if (confirmed != true) return;
     }
 
+    if (!mounted) return;
+
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
       final prefs = await SharedPreferences.getInstance();
@@ -4532,15 +4571,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (_) => CareElderScreen(
-          isDarkMode: Theme.of(context).brightness == Brightness.dark,
-          onToggleDarkMode: widget.onToggleDarkMode,
-        ),
-      ),
-      (route) => false,
-    );
+    rootNavigator.popUntil((route) => route.isFirst);
   }
 
   Future<void> _openNotificationsPanel() async {
@@ -4589,7 +4620,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         : ValueListenableBuilder<int>(
                             valueListenable: _notificationStatusChanged,
                             builder: (context, value, child) {
-                              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              return StreamBuilder<
+                                QuerySnapshot<Map<String, dynamic>>
+                              >(
                                 stream: FirebaseFirestore.instance
                                     .collection('users')
                                     .doc(scope.selfUid)
@@ -4617,9 +4650,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
                                   if (notifications.isEmpty) {
                                     return const Center(
-                                      child: Text(
-                                        'Chưa có thông báo.',
-                                      ),
+                                      child: Text('Chưa có thông báo.'),
                                     );
                                   }
 
@@ -4649,8 +4680,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
 
     if (scope != null && mounted) {
-      final idsToMarkRead = _notificationPanelOpenedUnreadIds
-          .difference(_notificationPanelTouchedIds);
+      final idsToMarkRead = _notificationPanelOpenedUnreadIds.difference(
+        _notificationPanelTouchedIds,
+      );
       if (idsToMarkRead.isNotEmpty) {
         try {
           final batch = FirebaseFirestore.instance.batch();
@@ -4750,19 +4782,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.isChildView
-              ? 'Tài Khoản Con'
-              : 'Tài Khoản Cha Mẹ',
+          widget.isChildView ? 'Tài Khoản Con' : 'Tài Khoản Cha Mẹ',
           style: const TextStyle(
             fontWeight: FontWeight.w800,
             fontSize: 20,
             letterSpacing: 0.3,
           ),
         ),
-        actions: [
-          _buildNotificationAction(),
-          _buildAdminAction(),
-        ],
+        actions: [_buildNotificationAction(), _buildAdminAction()],
       ),
       body: _loadingScope
           ? const Center(child: CircularProgressIndicator())
@@ -5155,9 +5182,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
             body: SafeArea(
               child: ListView(
                 padding: const EdgeInsets.all(16),
-                children: [
-                  _buildDashboardCard(scope),
-                ],
+                children: [_buildDashboardCard(scope)],
               ),
             ),
           );
@@ -5186,12 +5211,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         width: size,
         height: size,
         child: Material(
-            color: onTap == null
-                ? disabledBg
-                : Color.alphaBlend(
-                    scheme.primary.withValues(alpha: 0.10),
-                    surface,
-                  ),
+          color: onTap == null
+              ? disabledBg
+              : Color.alphaBlend(
+                  scheme.primary.withValues(alpha: 0.10),
+                  surface,
+                ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: BorderSide(
@@ -5365,10 +5390,7 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Widget _buildChatPage(
-    _FamilyScope scope, {
-    int unreadCutoffMillis = 0,
-  }) {
+  Widget _buildChatPage(_FamilyScope scope, {int unreadCutoffMillis = 0}) {
     return Column(
       children: [
         Expanded(
@@ -5384,8 +5406,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     ? (shareSnapshot.error ?? 'unknown')
                     : null;
 
-                final shareDocs =
-                    shareSnapshot.hasError ? const [] : (shareSnapshot.data?.docs ?? const []);
+                final shareDocs = shareSnapshot.hasError
+                    ? const []
+                    : (shareSnapshot.data?.docs ?? const []);
                 final mediaEntries = shareDocs
                     .where(
                       (doc) =>
@@ -5428,7 +5451,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                         chatSnapshot.data?.docs
                             .where(
                               (doc) =>
-                                  !_isDeletedForUser(doc.data(), scope.selfUid) &&
+                                  !_isDeletedForUser(
+                                    doc.data(),
+                                    scope.selfUid,
+                                  ) &&
                                   !_isLocallyDeletedTimelineDoc(
                                     isChat: true,
                                     id: doc.id,
@@ -5444,12 +5470,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
                     final firstUnreadIndex = timelineItems.indexWhere(
-                      (item) =>
-                          _isUnreadShareBoxTimelineItem(
-                            item,
-                            scope.selfUid,
-                            unreadCutoffMillis,
-                          ),
+                      (item) => _isUnreadShareBoxTimelineItem(
+                        item,
+                        scope.selfUid,
+                        unreadCutoffMillis,
+                      ),
                     );
 
                     final tailKey = timelineItems.isEmpty
@@ -5524,7 +5549,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.only(bottom: 10),
                             itemCount:
-                                timelineItems.length + 1 + (mediaError != null || mediaLoading ? 1 : 0),
+                                timelineItems.length +
+                                1 +
+                                (mediaError != null || mediaLoading ? 1 : 0),
                             separatorBuilder: (context, index) =>
                                 const SizedBox(height: 8),
                             itemBuilder: (context, index) {
@@ -5547,7 +5574,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 );
                               }
 
-                              final hasMediaBanner = mediaError != null || mediaLoading;
+                              final hasMediaBanner =
+                                  mediaError != null || mediaLoading;
                               if (hasMediaBanner && index == 1) {
                                 final bannerText = mediaLoading
                                     ? 'Đang tải media...'
@@ -5591,22 +5619,24 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                               final alignment = isMine
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft;
-                                final itemId = item.isChat
+                              final itemId = item.isChat
                                   ? item.chat!.id
                                   : item.media!.id;
-                                final itemKey = _timelineLocalKey(
+                              final itemKey = _timelineLocalKey(
                                 isChat: item.isChat,
                                 id: itemId,
-                                );
-                                final isOptimisticallyRevoked =
-                                  _shareboxOptimisticRevokedKeys
-                                    .contains(itemKey);
-                                final isRevoked =
+                              );
+                              final isOptimisticallyRevoked =
+                                  _shareboxOptimisticRevokedKeys.contains(
+                                    itemKey,
+                                  );
+                              final isRevoked =
                                   item.isRevoked || isOptimisticallyRevoked;
-                                final revokedAt = item.revokedAt ??
+                              final revokedAt =
+                                  item.revokedAt ??
                                   (isOptimisticallyRevoked
-                                    ? DateTime.now()
-                                    : null);
+                                      ? DateTime.now()
+                                      : null);
                               final bubbleColor = isRevoked
                                   ? Colors.grey.shade200
                                   : (isMine
@@ -5618,7 +5648,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                         ? Colors.blue.shade200
                                         : Colors.blueGrey.shade200);
                               final bubble = ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 250),
+                                constraints: const BoxConstraints(
+                                  maxWidth: 250,
+                                ),
                                 child: Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
@@ -5698,7 +5730,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                                           width: 170,
                                                           child: Center(
                                                             child: Icon(
-                                                              Icons.broken_image,
+                                                              Icons
+                                                                  .broken_image,
                                                             ),
                                                           ),
                                                         ),
@@ -5712,29 +5745,29 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                 alignment: alignment,
                                 child: isMine
                                     ? (isRevoked
-                                        ? bubble
-                                        : Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.end,
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              IconButton(
-                                                tooltip: 'Tùy chọn',
-                                                icon: const Icon(
-                                                  Icons.more_horiz,
-                                                  size: 20,
+                                          ? bubble
+                                          : Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.end,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                IconButton(
+                                                  tooltip: 'Tùy chọn',
+                                                  icon: const Icon(
+                                                    Icons.more_horiz,
+                                                    size: 20,
+                                                  ),
+                                                  onPressed: () =>
+                                                      _showMyMessageActions(
+                                                        scope,
+                                                        item,
+                                                      ),
                                                 ),
-                                                onPressed: () =>
-                                                    _showMyMessageActions(
-                                                      scope,
-                                                      item,
-                                                    ),
-                                              ),
-                                              bubble,
-                                            ],
-                                          ))
+                                                bubble,
+                                              ],
+                                            ))
                                     : bubble,
                               );
 
@@ -5758,11 +5791,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                           bottom: 14,
                           child: FloatingActionButton.small(
                             heroTag: 'chat_jump_latest',
-                            onPressed: () => _autoScrollChatToLatest(
-                              force: true,
+                            onPressed: () =>
+                                _autoScrollChatToLatest(force: true),
+                            backgroundColor: Colors.black.withValues(
+                              alpha: 0.45,
                             ),
-                            backgroundColor:
-                                Colors.black.withValues(alpha: 0.45),
                             foregroundColor: Colors.white,
                             child: const Icon(Icons.keyboard_arrow_down),
                           ),
@@ -6112,7 +6145,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                     SizedBox(width: 8),
                     Text(
                       'Thống kê công việc',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
@@ -6224,22 +6260,18 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Widget _buildWeeklyTaskDistributionSection({
-    required List<_TaskItem> tasks,
-  }) {
+  Widget _buildWeeklyTaskDistributionSection({required List<_TaskItem> tasks}) {
     final today = DateTime.now();
-    final weekStart = _startOfWeekMonday(today)
-        .add(Duration(days: _distributionWeekOffset * 7));
+    final weekStart = _startOfWeekMonday(
+      today,
+    ).add(Duration(days: _distributionWeekOffset * 7));
     final weekEnd = weekStart.add(const Duration(days: 7));
     final weekTasks = tasks.where((task) {
       final scheduledAt = task.scheduledAt;
       return !scheduledAt.isBefore(weekStart) && scheduledAt.isBefore(weekEnd);
     }).toList();
 
-    final dailyBuckets = List.generate(
-      7,
-      (_) => <int>[0, 0, 0],
-    );
+    final dailyBuckets = List.generate(7, (_) => <int>[0, 0, 0]);
     final dailyTasks = List.generate(7, (_) => <_TaskItem>[]);
 
     for (final task in weekTasks) {
@@ -6256,10 +6288,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
     final maxDailyTotal = dailyBuckets.fold<int>(
       0,
-      (currentMax, bucket) => math.max(
-        currentMax,
-        bucket[0] + bucket[1] + bucket[2],
-      ),
+      (currentMax, bucket) =>
+          math.max(currentMax, bucket[0] + bucket[1] + bucket[2]),
     );
 
     return Container(
@@ -6273,51 +6303,51 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Row(
-            children: [
-              Icon(
-                Icons.bar_chart_rounded,
-                size: 18,
-                color: Colors.blueGrey.shade700,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Biểu đồ phân bố số lượng công việc theo ngày',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.bar_chart_rounded,
+                  size: 18,
+                  color: Colors.blueGrey.shade700,
                 ),
-              ),
-            ],
-          ),
-        ),
-        Row(
-          children: [
-            IconButton(
-              tooltip: 'Tuần trước',
-              onPressed: () => setState(() => _distributionWeekOffset--),
-              icon: const Icon(Icons.chevron_left),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Biểu đồ phân bố số lượng công việc theo ngày',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
             ),
-            Expanded(
-              child: Center(
-                child: Text(
-                  '${_formatDayMonth(weekStart)} - ${_formatDayMonth(weekStart.add(const Duration(days: 6)))}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _adaptiveTextSecondary,
-                    fontWeight: FontWeight.w600,
+          ),
+          Row(
+            children: [
+              IconButton(
+                tooltip: 'Tuần trước',
+                onPressed: () => setState(() => _distributionWeekOffset--),
+                icon: const Icon(Icons.chevron_left),
+              ),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    '${_formatDayMonth(weekStart)} - ${_formatDayMonth(weekStart.add(const Duration(days: 6)))}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _adaptiveTextSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
-            ),
-            IconButton(
-              tooltip: 'Tuần sau',
-              onPressed: () => setState(() => _distributionWeekOffset++),
-              icon: const Icon(Icons.chevron_right),
-            ),
-          ],
-        ),
+              IconButton(
+                tooltip: 'Tuần sau',
+                onPressed: () => setState(() => _distributionWeekOffset++),
+                icon: const Icon(Icons.chevron_right),
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
           if (weekTasks.isEmpty)
             Padding(
@@ -6356,9 +6386,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                             onTap: total == 0
                                 ? null
                                 : () => _showTaskDistributionDetails(
-                                      day: day,
-                                      tasks: barTasks,
-                                    ),
+                                    day: day,
+                                    tasks: barTasks,
+                                  ),
                             child: SizedBox(
                               height: barHeight,
                               width: double.infinity,
@@ -6372,7 +6402,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                   ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.04),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.04,
+                                      ),
                                       blurRadius: 8,
                                       offset: const Offset(0, 2),
                                     ),
@@ -6398,21 +6430,36 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                               Expanded(
                                                 flex: completed,
                                                 child: _buildTaskChartSegment(
-                                                  color: const Color.fromARGB(255, 182, 255, 114),
+                                                  color: const Color.fromARGB(
+                                                    255,
+                                                    182,
+                                                    255,
+                                                    114,
+                                                  ),
                                                 ),
                                               ),
                                             if (overdue > 0)
                                               Expanded(
                                                 flex: overdue,
                                                 child: _buildTaskChartSegment(
-                                                  color: const Color.fromARGB(255, 255, 117, 115),
+                                                  color: const Color.fromARGB(
+                                                    255,
+                                                    255,
+                                                    117,
+                                                    115,
+                                                  ),
                                                 ),
                                               ),
                                             if (pending > 0)
                                               Expanded(
                                                 flex: pending,
                                                 child: _buildTaskChartSegment(
-                                                  color: const Color.fromARGB(255, 255, 242, 95),
+                                                  color: const Color.fromARGB(
+                                                    255,
+                                                    255,
+                                                    242,
+                                                    95,
+                                                  ),
                                                 ),
                                               ),
                                           ],
@@ -6470,12 +6517,12 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
 
   Widget _buildCompletionRateChart({required List<_TaskItem> tasks}) {
     final now = DateTime.now();
-    
+
     // Chỉ tính những công việc đã đến deadline hoặc đã hoàn thành
     final dueTasks = tasks.where((task) {
       return task.scheduledAt.isBefore(now) || task.completed;
     }).toList();
-    
+
     if (dueTasks.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -6492,9 +6539,11 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
         ),
       );
     }
-    
+
     final completedCount = dueTasks.where((task) => task.completed).length;
-    final overdueCount = dueTasks.where((task) => !task.completed && _isTaskOverdue(task, now)).length;
+    final overdueCount = dueTasks
+        .where((task) => !task.completed && _isTaskOverdue(task, now))
+        .length;
     final totalDue = dueTasks.length;
     final completionRate = (completedCount / totalDue * 100).toStringAsFixed(1);
 
@@ -6562,7 +6611,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       const SizedBox(width: 6),
                       Text(
                         '$completedCount',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
@@ -6578,7 +6630,10 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       const SizedBox(width: 6),
                       Text(
                         '$overdueCount',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
@@ -6599,7 +6654,6 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
       ),
     );
   }
-
 
   Widget _buildChartLegendChip(String label, Color color) {
     return Expanded(
@@ -6648,14 +6702,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     );
   }
 
-  Widget _buildTaskChartSegment({
-    required Color color,
-  }) {
+  Widget _buildTaskChartSegment({required Color color}) {
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.zero,
-      ),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.zero),
     );
   }
 
@@ -6664,10 +6713,14 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
     required List<_TaskItem> tasks,
   }) async {
     final pendingTasks = tasks
-        .where((task) => !task.completed && !_isTaskOverdue(task, DateTime.now()))
+        .where(
+          (task) => !task.completed && !_isTaskOverdue(task, DateTime.now()),
+        )
         .toList();
     final overdueTasks = tasks
-        .where((task) => !task.completed && _isTaskOverdue(task, DateTime.now()))
+        .where(
+          (task) => !task.completed && _isTaskOverdue(task, DateTime.now()),
+        )
         .toList();
     final completedTasks = tasks.where((task) => task.completed).toList();
 
@@ -6749,23 +6802,29 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       Expanded(
                         child: tasks.isEmpty
                             ? const Center(
-                                child: Text('Không có công việc trong ngày này.'),
+                                child: Text(
+                                  'Không có công việc trong ngày này.',
+                                ),
                               )
                             : ListView.separated(
                                 itemCount: tasks.length,
-                                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                                separatorBuilder: (context, index) =>
+                                    const SizedBox(height: 8),
                                 itemBuilder: (context, index) {
                                   final task = tasks[index];
                                   final isOverdue =
-                                      !task.completed && _isTaskOverdue(task, DateTime.now());
+                                      !task.completed &&
+                                      _isTaskOverdue(task, DateTime.now());
                                   final statusLabel = task.completed
                                       ? 'Đã hoàn thành'
-                                      : (isOverdue ? 'Đã hết hạn' : 'Chưa hoàn thành');
+                                      : (isOverdue
+                                            ? 'Đã hết hạn'
+                                            : 'Chưa hoàn thành');
                                   final statusColor = task.completed
                                       ? Colors.green.shade400
                                       : (isOverdue
-                                          ? Colors.red.shade400
-                                          : Colors.orange.shade400);
+                                            ? Colors.red.shade400
+                                            : Colors.orange.shade400);
 
                                   return Container(
                                     padding: const EdgeInsets.all(12),
@@ -6777,7 +6836,8 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                       ),
                                     ),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -6791,15 +6851,20 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                               ),
                                             ),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 8,
-                                                vertical: 4,
-                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
+                                                  ),
                                               decoration: BoxDecoration(
-                                                color: statusColor.withValues(alpha: 0.12),
+                                                color: statusColor.withValues(
+                                                  alpha: 0.12,
+                                                ),
                                                 borderRadius: BorderRadius.zero,
                                                 border: Border.all(
-                                                  color: statusColor.withValues(alpha: 0.35),
+                                                  color: statusColor.withValues(
+                                                    alpha: 0.35,
+                                                  ),
                                                 ),
                                               ),
                                               child: Text(
@@ -6817,7 +6882,9 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                                           const SizedBox(height: 6),
                                           Text(
                                             task.note,
-                                            style: const TextStyle(fontSize: 12),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
                                           ),
                                         ],
                                         const SizedBox(height: 6),
@@ -6908,108 +6975,116 @@ class _FamilyHomePageState extends State<_FamilyHomePage> {
                       SizedBox(
                         height: 56,
                         child: TabBar(
-                          labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                          labelPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                          ),
                           dividerColor: Colors.transparent,
                           indicatorColor: Theme.of(context).colorScheme.primary,
                           indicatorWeight: 2.4,
                           tabs: [
-                          Tab(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: Colors.orange.withValues(alpha: 0.5),
+                            Tab(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.orange.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Text(
+                                      'Chưa hoàn thành',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 11),
+                                    ),
+                                    Text(
+                                      '${pendingTasks.length}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              alignment: Alignment.center,
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Text(
-                                    'Chưa hoàn thành',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 11),
-                                  ),
-                                  Text(
-                                    '${pendingTasks.length}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ),
-                          ),
-                          Tab(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.red.withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: Colors.red.withValues(alpha: 0.45),
+                            Tab(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.18),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.red.withValues(alpha: 0.45),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Text(
+                                      'Đã hết hạn',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 11),
+                                    ),
+                                    Text(
+                                      '${overdueTasks.length}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              alignment: Alignment.center,
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Text(
-                                    'Đã hết hạn',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 11),
-                                  ),
-                                  Text(
-                                    '${overdueTasks.length}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ),
-                          ),
-                          Tab(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: Colors.green.withValues(alpha: 0.5),
+                            Tab(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.green.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Text(
+                                      'Đã hoàn thành',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 11),
+                                    ),
+                                    Text(
+                                      '${completedTasks.length}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              alignment: Alignment.center,
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Text(
-                                    'Đã hoàn thành',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 11),
-                                  ),
-                                  Text(
-                                    '${completedTasks.length}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ),
-                          ),
-                        ],
+                          ],
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -7906,24 +7981,21 @@ class _PieChartPainter extends CustomPainter {
   final double completedCount;
   final double overdueCount;
 
-  _PieChartPainter({
-    required this.completedCount,
-    required this.overdueCount,
-  });
+  _PieChartPainter({required this.completedCount, required this.overdueCount});
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = math.min(size.width, size.height) / 2 - 16;
-    
+
     final total = completedCount + overdueCount;
-    
+
     // Paint the completed part (green)
     final completedAngle = (completedCount / total) * 2 * math.pi;
     final completedPaint = Paint()
       ..color = Colors.green.shade400
       ..style = PaintingStyle.fill;
-    
+
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       -math.pi / 2,
@@ -7931,12 +8003,12 @@ class _PieChartPainter extends CustomPainter {
       true,
       completedPaint,
     );
-    
+
     // Paint the overdue part (red)
     final overduePaint = Paint()
       ..color = Colors.red.shade400
       ..style = PaintingStyle.fill;
-    
+
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       -math.pi / 2 + completedAngle,
@@ -7944,13 +8016,13 @@ class _PieChartPainter extends CustomPainter {
       true,
       overduePaint,
     );
-    
+
     // Draw border
     final borderPaint = Paint()
       ..color = Colors.grey.shade300
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    
+
     canvas.drawCircle(center, radius, borderPaint);
   }
 
@@ -8039,8 +8111,7 @@ class _UserInboxNotification {
       messageId: (data['messageId'] ?? '').toString().trim().isEmpty
           ? null
           : (data['messageId'] ?? '').toString(),
-      createdAt:
-          createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
+      createdAt: createdAt is Timestamp ? createdAt.toDate() : DateTime.now(),
       isUnread: data['read'] != true,
     );
   }
