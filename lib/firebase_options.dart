@@ -39,44 +39,53 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyC3ZnLNyEofKDIQh7w1tSAcROXgqamzz5E',
-    appId: '1:533606697818:web:e36947f1db9f010b344163',
-    messagingSenderId: '533606697818',
-    projectId: 'careelder-e475b',
-    authDomain: 'careelder-e475b.firebaseapp.com',
-    storageBucket: 'careelder-e475b.firebasestorage.app',
-    measurementId: 'G-QHRYWQNJ8T',
+    apiKey: 'AIzaSyDNn7GI9BEQiqEI4STgMsgceSVEnnDLBts',
+    appId: '1:808281806068:web:9c7b975836813772f13aa1',
+    messagingSenderId: '808281806068',
+    projectId: 'smart-node-8578c',
+    authDomain: 'smart-node-8578c.firebaseapp.com',
+    storageBucket: 'smart-node-8578c.firebasestorage.app',
+    measurementId: 'G-RB0PP57SD9',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAgUhHU8wSJgO5MVNy95tMT07NEjzMOfz0',
-    appId: '1:448618578101:android:0b650370bb29e29cac3efc',
-    messagingSenderId: '448618578101',
-    projectId: 'react-native-firebase-testing',
-    storageBucket: 'react-native-firebase-testing.appspot.com',
+    apiKey: 'AIzaSyB2-35YT1RAYbKFsoFj6tSRH5_WbvRKU0U',
+    appId: '1:808281806068:android:4c9b1fc22bec7753f13aa1',
+    messagingSenderId: '808281806068',
+    projectId: 'smart-node-8578c',
+    storageBucket: 'smart-node-8578c.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAgUhHU8wSJgO5MVNy95tMT07NEjzMOfz0',
-    appId: '1:448618578101:ios:0b650370bb29e29cac3efc',
-    messagingSenderId: '448618578101',
-    projectId: 'react-native-firebase-testing',
-    storageBucket: 'react-native-firebase-testing.appspot.com',
+    apiKey: 'AIzaSyByz6f0tRTJj3zZ_hRoqayB0n1TrIORqEY',
+    appId: '1:808281806068:ios:446ef716a6e19d63f13aa1',
+    messagingSenderId: '808281806068',
+    projectId: 'smart-node-8578c',
+    storageBucket: 'smart-node-8578c.firebasestorage.app',
+    androidClientId: '808281806068-35pupt1ld49n52svpcuqv3o2925trhhq.apps.googleusercontent.com',
+    iosClientId: '808281806068-m26m49rogr2po7hmqo14g1i0ft356efd.apps.googleusercontent.com',
+    iosBundleId: 'com.example.finalapp',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyAgUhHU8wSJgO5MVNy95tMT07NEjzMOfz0',
-    appId: '1:448618578101:macos:0b650370bb29e29cac3efc',
-    messagingSenderId: '448618578101',
-    projectId: 'react-native-firebase-testing',
-    storageBucket: 'react-native-firebase-testing.appspot.com',
+    apiKey: 'AIzaSyByz6f0tRTJj3zZ_hRoqayB0n1TrIORqEY',
+    appId: '1:808281806068:ios:446ef716a6e19d63f13aa1',
+    messagingSenderId: '808281806068',
+    projectId: 'smart-node-8578c',
+    storageBucket: 'smart-node-8578c.firebasestorage.app',
+    androidClientId: '808281806068-35pupt1ld49n52svpcuqv3o2925trhhq.apps.googleusercontent.com',
+    iosClientId: '808281806068-m26m49rogr2po7hmqo14g1i0ft356efd.apps.googleusercontent.com',
+    iosBundleId: 'com.example.finalapp',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyAgUhHU8wSJgO5MVNy95tMT07NEjzMOfz0',
-    appId: '1:448618578101:windows:0b650370bb29e29cac3efc',
-    messagingSenderId: '448618578101',
-    projectId: 'react-native-firebase-testing',
-    storageBucket: 'react-native-firebase-testing.appspot.com',
+    apiKey: 'AIzaSyDNn7GI9BEQiqEI4STgMsgceSVEnnDLBts',
+    appId: '1:808281806068:web:e70eec62d4963d4cf13aa1',
+    messagingSenderId: '808281806068',
+    projectId: 'smart-node-8578c',
+    authDomain: 'smart-node-8578c.firebaseapp.com',
+    storageBucket: 'smart-node-8578c.firebasestorage.app',
+    measurementId: 'G-6LXVC1YXYQ',
   );
+
 }

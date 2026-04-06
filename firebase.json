@@ -1,8 +1,1 @@
-{
-  "firestore": {
-    "rules": "firestore.rules"
-  },
-  "functions": {
-    "source": "functions"
-  }
-}
+{"firestore":{"rules":"firestore.rules"},"functions":{"source":"functions"},"flutter":{"platforms":{"android":{"default":{"projectId":"smart-node-8578c","appId":"1:808281806068:android:4c9b1fc22bec7753f13aa1","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"smart-node-8578c","configurations":{"android":"1:808281806068:android:4c9b1fc22bec7753f13aa1","ios":"1:808281806068:ios:446ef716a6e19d63f13aa1","macos":"1:808281806068:ios:446ef716a6e19d63f13aa1","web":"1:808281806068:web:9c7b975836813772f13aa1","windows":"1:808281806068:web:e70eec62d4963d4cf13aa1"}}}}}}

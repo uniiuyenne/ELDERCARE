@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'care_elder_screen.dart';
+import 'auth/auth_gate.dart';
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
@@ -65,7 +66,7 @@ class _MyAppState extends State<MyApp> {
 
     return MaterialApp(
       title: 'CareElder',
-       debugShowCheckedModeBanner: false,
+      debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
         colorScheme: lightScheme,
@@ -99,9 +100,7 @@ class _MyAppState extends State<MyApp> {
           }),
         ),
         inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           filled: true,
           fillColor: Colors.white,
           labelStyle: TextStyle(color: lightScheme.onSurface),
@@ -158,13 +157,11 @@ class _MyAppState extends State<MyApp> {
         ),
         iconTheme: const IconThemeData(color: Color(0xFFF0D487)),
         textTheme: ThemeData.dark().textTheme.apply(
-              bodyColor: Colors.white,
-              displayColor: Colors.white,
-            ),
+          bodyColor: Colors.white,
+          displayColor: Colors.white,
+        ),
         inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           filled: true,
           fillColor: const Color(0xFF222222),
           labelStyle: TextStyle(
@@ -193,10 +190,14 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
       ),
-      home: CareElderScreen(
-        isDarkMode: _themeMode == ThemeMode.dark,
-        onToggleDarkMode: (enabled) {
-          _setDarkModeEnabled(enabled);
+      home: AuthGate(
+        signedInBuilder: (context, user) {
+          return CareElderScreen(
+            isDarkMode: _themeMode == ThemeMode.dark,
+            onToggleDarkMode: (enabled) {
+              _setDarkModeEnabled(enabled);
+            },
+          );
         },
       ),
     );
